@@ -31,6 +31,8 @@ gets its own new ADR that supersedes the old one, which stays in place with its 
 - Keep records short — a paragraph or two per section is normal. An ADR documents a decision and
   its reasoning, not a design document.
 
+For how skinning works from a user's point of view, see [../skinning.md](../skinning.md).
+
 If you're working with Claude Code in this repo, `.claude/skills/adr/SKILL.md` automates the
 mechanics of adding one.
 
@@ -48,6 +50,7 @@ mechanics of adding one.
 | [0008](0008-toml-skins.md) | Support skins as TOML files, keeping stock egui as the default | Accepted (bitmap exclusion superseded by [ADR-0010](0010-classic-wsz-renderer.md)) |
 | [0009](0009-convert-winamp-wsz-colours.md) | Convert classic Winamp `.wsz` skins to TOML skins, colours only | Superseded by [ADR-0010](0010-classic-wsz-renderer.md) |
 | [0010](0010-classic-wsz-renderer.md) | Render classic `.wsz` skins pixel-for-pixel in fixed-size windows | Accepted |
+| [0011](0011-built-in-skins-compiled-in-copy-out.md) | Keep built-in skins compiled in, with a non-overwriting "copy to folder" for editing | Accepted |
 
 ## Decision Relationship
 
@@ -64,6 +67,7 @@ flowchart TD
     H --> I[0009: Convert .wsz colours to TOML]
     I --> J[0010: Classic .wsz renderer]
     F --> J
+    H --> K[0011: Built-in skins compiled in, copy out]
 ```
 
 ## Revisit Triggers
@@ -74,4 +78,8 @@ flowchart TD
 - Demand for artist/album browsing or library-wide search — see [ADR-0003](0003-browse-folders-no-library-database.md).
 - Multi-monitor use or a mini player needs real OS windows — see [ADR-0006](0006-floating-egui-windows.md).
 - Clipping from EQ boosts is audible in practice — add a limiter ([ADR-0007](0007-biquad-equalizer-in-source-chain.md)).
+- Classic skins need windowshade mode, other scales or a resizable playlist — see the
+  not-implemented list in [ADR-0010](0010-classic-wsz-renderer.md).
+- Built-in skins start changing often enough that stale user copies cause confusion — see
+  [ADR-0011](0011-built-in-skins-compiled-in-copy-out.md).
 - A third app wants mount discovery, or the two copies diverge — extract a crate ([ADR-0005](0005-reuse-photograph-mount-discovery.md)).

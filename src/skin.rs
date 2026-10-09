@@ -304,6 +304,31 @@ pub fn user_skins_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("unamp").join("skins"))
 }
 
+/// What `export_built_ins` did, by file name.
+#[derive(Debug, Default, PartialEq)]
+pub struct Export {
+    pub copied: Vec<String>,
+    /// Already present; left untouched so edits survive.
+    pub skipped: Vec<String>,
+}
+
+/// Writes the built-in skins' TOML into `dir` so they can be edited there.
+/// Never overwrites: an existing file of the same name is kept as is.
+pub fn export_built_ins(dir: &Path) -> Result<Export, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut export = Export::default();
+    for (file, text) in BUILT_IN {
+        let target = dir.join(file);
+        if target.exists() {
+            export.skipped.push(file.to_string());
+            continue;
+        }
+        std::fs::write(&target, text).map_err(|e| format!("{}: {e}", target.display()))?;
+        export.copied.push(file.to_string());
+    }
+    Ok(export)
+}
+
 /// Default, the built-ins, then user skins sorted by name. A user skin with
 /// a built-in's name replaces it. Returns the skins and any load errors.
 pub fn load_all() -> (Vec<Skin>, Vec<String>) {
@@ -356,6 +381,23 @@ fn load_dir(dir: &Path) -> (Vec<Skin>, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_copies_built_ins_once_and_keeps_edits() {
+        let dir = std::env::temp_dir().join(format!("unamp-export-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let first = export_built_ins(&dir).unwrap();
+        assert_eq!(first.copied, vec!["steam-classic.toml"]);
+        let path = dir.join("steam-classic.toml");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), BUILT_IN[0].1);
+
+        std::fs::write(&path, "name = \"Steam Classic\"\n").unwrap();
+        let second = export_built_ins(&dir).unwrap();
+        assert!(second.copied.is_empty());
+        assert_eq!(second.skipped, vec!["steam-classic.toml"]);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "name = \"Steam Classic\"\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn parses_hex_colours() {

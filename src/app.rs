@@ -35,6 +35,8 @@ pub struct UnAmpApp {
     skins: Vec<Skin>,
     /// Problems loading skin files, shown in the Skins menu.
     skin_errors: Vec<String>,
+    /// Result of the last "Copy built-in skins to folder", shown in the menu.
+    skin_notice: Option<String>,
     palette: Palette,
     /// Bitmaps for the Player/EQ/Playlist when the skin has a `classic` file.
     classic: Option<ClassicSkin>,
@@ -72,6 +74,7 @@ impl UnAmpApp {
             eq,
             skins,
             skin_errors,
+            skin_notice: None,
             palette,
             classic,
             now_info: None,
@@ -728,20 +731,31 @@ impl UnAmpApp {
 
         ui.separator();
         if ui.button("Reload skins").clicked() {
-            let (skins, errors) = skin::load_all();
-            self.skins = skins;
-            self.skin_errors = errors;
-            let current = self
-                .skins
-                .iter()
-                .find(|s| s.name == self.config.skin)
-                .cloned()
-                .unwrap_or_else(Skin::default_skin);
-            self.config.skin = current.name.clone();
-            self.palette = current.apply(ui.ctx());
-            self.classic = load_classic(&current, ui.ctx(), &mut self.skin_errors);
+            self.reload_skins(ui.ctx());
         }
         if let Some(dir) = skin::user_skins_dir() {
+            if ui
+                .button("Copy built-in skins to folder")
+                .on_hover_text("Puts editable copies in the skins folder; never overwrites existing files")
+                .clicked()
+            {
+                self.skin_notice = Some(match skin::export_built_ins(&dir) {
+                    Ok(export) => {
+                        // The copies share the built-ins' names, so after a
+                        // reload they're the versions in use.
+                        self.reload_skins(ui.ctx());
+                        let mut parts = Vec::new();
+                        if !export.copied.is_empty() {
+                            parts.push(format!("Copied {}", export.copied.join(", ")));
+                        }
+                        if !export.skipped.is_empty() {
+                            parts.push(format!("kept your existing {}", export.skipped.join(", ")));
+                        }
+                        parts.join("; ")
+                    }
+                    Err(e) => format!("Couldn't copy skins: {e}"),
+                });
+            }
             if ui
                 .button("Open skins folder")
                 .on_hover_text(dir.display().to_string())
@@ -751,12 +765,31 @@ impl UnAmpApp {
                 let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
             }
         }
+        if let Some(notice) = &self.skin_notice {
+            ui.label(egui::RichText::new(notice).weak());
+        }
         if !self.skin_errors.is_empty() {
             ui.separator();
             for err in &self.skin_errors {
                 ui.colored_label(ui.visuals().error_fg_color, err);
             }
         }
+    }
+
+    /// Rescans built-in and user skins and re-applies the current one.
+    fn reload_skins(&mut self, ctx: &egui::Context) {
+        let (skins, errors) = skin::load_all();
+        self.skins = skins;
+        self.skin_errors = errors;
+        let current = self
+            .skins
+            .iter()
+            .find(|s| s.name == self.config.skin)
+            .cloned()
+            .unwrap_or_else(Skin::default_skin);
+        self.config.skin = current.name.clone();
+        self.palette = current.apply(ctx);
+        self.classic = load_classic(&current, ctx, &mut self.skin_errors);
     }
 
     fn show_equalizer(&mut self, ui: &mut egui::Ui) {

@@ -52,40 +52,16 @@ The classic bottom row, with nothing focused:
 
 ## Skins
 
-UnAmp starts with egui's stock look. Choose another from **Skins** in the menu bar.
+UnAmp starts with egui's stock look; pick another from the **Skins** menu.
 
-A skin is one TOML file. Copy [`skins/steam-classic.toml`](skins/steam-classic.toml), which
-documents every key, into `~/.config/unamp/skins/`, change its `name` and colours, then use
-**Skins → Reload skins**. Any colour you leave out keeps egui's default. Typos and bad colours are
-reported in the Skins menu.
+- **TOML skins** recolour everything. Steam Classic is built in; write your own in
+  `~/.config/unamp/skins/`, or use **Skins → Copy built-in skins to folder** for an annotated one to edit.
+- **Classic Winamp skins**: drop a `.wsz` in the same folder and reload. The Player, Equalizer
+  and Playlist are drawn from the skin's own bitmaps, the way Winamp drew them. Find thousands at
+  the [Winamp Skin Museum](https://skins.webamp.org).
 
-### Classic Winamp skins
-
-Got an old `.wsz`? Drop it into `~/.config/unamp/skins/` and choose **Skins → Reload skins**.
-UnAmp converts it to a `.toml` of the same name and lists it in the menu. Pick it, and the Player,
-Equalizer and Playlist are drawn from the skin's own bitmaps, at Winamp's layout and double size:
-title bars, sprite buttons, LED digits, pixel-font ticker, sliders and all
-([ADR-0010](docs/adr/0010-classic-wsz-renderer.md)). The Media Library and menus take on the skin's
-colours.
-
-The `.toml` is yours to tweak and won't be regenerated unless you delete it. Remove its
-`classic = …` line to keep the skin's colours on UnAmp's regular windows instead.
-
-Find thousands of skins at the [Winamp Skin Museum](https://skins.webamp.org).
-
-```toml
-name = "My Skin"
-base = "dark"          # egui theme to start from: "dark" or "light"
-corner_radius = 0
-shadows = false
-
-[colors]
-background = "#4C5844"
-accent = "#958831"
-
-[player]
-time = "#C4B550"
-```
+The full guide, covering every TOML key, what a `.wsz` turns into, and what classic mode does and
+doesn't draw, is in [docs/skinning.md](docs/skinning.md).
 
 ## Install
 
