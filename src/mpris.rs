@@ -14,7 +14,9 @@ use std::time::Instant;
 
 use zbus::zvariant::{ObjectPath, OwnedValue, Value};
 
+use crate::command::Command as PlayerCommand;
 use crate::config::Repeat;
+use crate::player::PlayState;
 
 const BUS_NAME: &str = "org.mpris.MediaPlayer2.unamp";
 const OBJECT_PATH: &str = "/org/mpris/MediaPlayer2";
@@ -513,6 +515,59 @@ fn changed_properties(old: &State, new: &State) -> HashMap<String, OwnedValue> {
     out
 }
 
+/// What `to_player_command` needs to know about playback.
+pub struct Playback<'a> {
+    pub state: PlayState,
+    pub position: std::time::Duration,
+    pub duration: Option<std::time::Duration>,
+    pub track_id: Option<&'a str>,
+}
+
+/// Translates an MPRIS request into the app's command, applying the spec's
+/// state-dependent rules: Play does nothing while playing, Pause only
+/// pauses, PlayPause starts from stopped, seeking past the end goes to the
+/// next track, and SetPosition is ignored for a stale track id.
+pub fn to_player_command(command: Command, now: &Playback<'_>) -> Option<PlayerCommand> {
+    use PlayState as S;
+    use PlayerCommand as P;
+    Some(match command {
+        Command::PlayPause => match now.state {
+            S::Playing | S::Paused => P::TogglePause,
+            S::Stopped => P::Play,
+            S::Loading => return None,
+        },
+        Command::Play => match now.state {
+            S::Paused => P::TogglePause,
+            S::Stopped => P::Play,
+            S::Playing | S::Loading => return None,
+        },
+        Command::Pause if now.state == S::Playing => P::TogglePause,
+        Command::Pause => return None,
+        Command::Stop => P::Stop,
+        Command::Next => P::Next,
+        Command::Previous => P::Previous,
+        Command::Seek(offset_us) => {
+            let target = now.position.as_micros() as i64 + offset_us;
+            match now.duration {
+                Some(d) if target > d.as_micros() as i64 => P::Next,
+                _ => P::SeekTo(std::time::Duration::from_micros(target.max(0) as u64)),
+            }
+        }
+        Command::SetPosition(track_id, position_us) => {
+            let in_range = now.duration.is_some_and(|d| position_us <= d.as_micros() as i64);
+            if now.track_id != Some(track_id.as_str()) || position_us < 0 || !in_range {
+                return None;
+            }
+            P::SeekTo(std::time::Duration::from_micros(position_us as u64))
+        }
+        Command::Raise => P::Raise,
+        Command::Quit => P::Quit,
+        Command::SetVolume(v) => P::SetVolume(v as f32),
+        Command::SetShuffle(on) => P::SetShuffle(on),
+        Command::SetRepeat(r) => P::SetRepeat(r),
+    })
+}
+
 /// A `file://` URL for a local path, percent-encoding anything that isn't
 /// a plain path character.
 pub fn file_url(path: &std::path::Path) -> String {
@@ -593,6 +648,49 @@ mod tests {
         assert_eq!(paused.now_us(), 5_000_000);
         let running = Clock { running: true, ..paused };
         assert!(running.now_us() >= 7_000_000);
+    }
+
+    fn at(state: PlayState, position_s: u64) -> Playback<'static> {
+        Playback {
+            state,
+            position: std::time::Duration::from_secs(position_s),
+            duration: Some(std::time::Duration::from_secs(200)),
+            track_id: Some("/org/unamp/track/7"),
+        }
+    }
+
+    #[test]
+    fn play_and_pause_follow_the_spec() {
+        use PlayerCommand as P;
+        assert_eq!(to_player_command(Command::Play, &at(PlayState::Playing, 0)), None);
+        assert_eq!(to_player_command(Command::Play, &at(PlayState::Paused, 0)), Some(P::TogglePause));
+        assert_eq!(to_player_command(Command::Play, &at(PlayState::Stopped, 0)), Some(P::Play));
+        assert_eq!(to_player_command(Command::Pause, &at(PlayState::Paused, 0)), None);
+        assert_eq!(to_player_command(Command::Pause, &at(PlayState::Playing, 0)), Some(P::TogglePause));
+        assert_eq!(to_player_command(Command::PlayPause, &at(PlayState::Stopped, 0)), Some(P::Play));
+        assert_eq!(to_player_command(Command::PlayPause, &at(PlayState::Loading, 0)), None);
+    }
+
+    #[test]
+    fn seeking_is_relative_and_past_the_end_skips() {
+        use std::time::Duration;
+        let now = at(PlayState::Playing, 100);
+        assert_eq!(to_player_command(Command::Seek(5_000_000), &now), Some(PlayerCommand::SeekTo(Duration::from_secs(105))));
+        assert_eq!(to_player_command(Command::Seek(-500_000_000), &now), Some(PlayerCommand::SeekTo(Duration::ZERO)));
+        assert_eq!(to_player_command(Command::Seek(150_000_000), &now), Some(PlayerCommand::Next));
+    }
+
+    #[test]
+    fn set_position_ignores_stale_tracks_and_out_of_range() {
+        let now = at(PlayState::Playing, 10);
+        let set = |id: &str, us| Command::SetPosition(id.into(), us);
+        assert_eq!(
+            to_player_command(set("/org/unamp/track/7", 60_000_000), &now),
+            Some(PlayerCommand::SeekTo(std::time::Duration::from_secs(60)))
+        );
+        assert_eq!(to_player_command(set("/org/unamp/track/6", 60_000_000), &now), None);
+        assert_eq!(to_player_command(set("/org/unamp/track/7", 300_000_000), &now), None);
+        assert_eq!(to_player_command(set("/org/unamp/track/7", -1), &now), None);
     }
 
     #[test]

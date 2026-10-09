@@ -57,6 +57,7 @@ mechanics of adding one.
 | [0015](0015-search-by-walking.md) | Search the current location by walking its folders, without an index | Proposed |
 | [0016](0016-mpris-media-controls.md) | Expose playback over MPRIS with zbus, optional at runtime | Accepted |
 | [0017](0017-daw-style-waveform.md) | Draw a DAW-style whole-track waveform by decoding the track a second time | Proposed |
+| [0018](0018-one-command-path.md) | Route every front end through one command type and shared display rules | Accepted |
 
 ## Decision Relationship
 
@@ -85,6 +86,8 @@ flowchart TD
     D --> P
     F --> Q[0017: DAW-style waveform]
     D --> Q
+    J --> R[0018: One command path]
+    P --> R
 ```
 
 ## Revisit Triggers

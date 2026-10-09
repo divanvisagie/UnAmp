@@ -139,6 +139,23 @@ impl State {
     }
 }
 
+/// A gain as a 0–1 slider position (0 = −MAX_DB, 1 = +MAX_DB).
+pub fn level(db: f32) -> f32 {
+    ((db + MAX_DB) / (2.0 * MAX_DB)).clamp(0.0, 1.0)
+}
+
+/// The gain for a 0–1 slider position; the inverse of `level`.
+pub fn db_at_level(level: f32) -> f32 {
+    (level.clamp(0.0, 1.0) * 2.0 - 1.0) * MAX_DB
+}
+
+/// Frequency at position `t` (0–1) across a response graph, on the log
+/// scale from 20 Hz to 20 kHz that both EQ windows draw on.
+pub fn graph_freq(t: f32) -> f32 {
+    let (lo, hi) = (20f32.ln(), 20_000f32.ln());
+    (lo + (hi - lo) * t.clamp(0.0, 1.0)).exp()
+}
+
 /// Overall response in dB at `freq` for these settings, as the UI curve.
 pub fn response_db(snapshot: &EqSnapshot, freq: f32, sample_rate: f32) -> f32 {
     let mut mag = 10f32.powf(snapshot.preamp / 20.0);
@@ -327,6 +344,17 @@ mod tests {
         }
         // +12 dB ≈ ×3.98
         assert!((peak - 3.98).abs() < 0.05, "peak {peak}");
+    }
+
+    #[test]
+    fn slider_level_round_trips_and_graph_spans_the_audible_range() {
+        for db in [-MAX_DB, -3.5, 0.0, 7.25, MAX_DB] {
+            assert!((db_at_level(level(db)) - db).abs() < 1e-4);
+        }
+        assert_eq!(level(0.0), 0.5);
+        assert!((graph_freq(0.0) - 20.0).abs() < 0.01);
+        assert!((graph_freq(1.0) - 20_000.0).abs() < 1.0);
+        assert!((graph_freq(0.5) - 632.5).abs() < 1.0, "geometric middle");
     }
 
     #[test]

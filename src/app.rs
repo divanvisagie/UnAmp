@@ -2,12 +2,15 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use crate::config::{AppConfig, Repeat};
+use crate::display;
 use crate::eq::{self, EqParams, EqSnapshot};
 use crate::library::{self, Library, Track, TrackAction};
 use crate::metadata::{self, TrackInfo};
 use crate::player::{Engine, PlayState};
 use crate::mpris::{self, Mpris};
-use crate::playlist::{self, Playlist};
+use crate::command::{Command, PlaylistAction, Window, with_queue_marker};
+use crate::playlist::Playlist;
+use crate::reorder::{DragList, Reorder};
 use crate::session;
 use crate::classic::{self, ClassicSkin};
 use crate::skin::{self, Palette, Skin};
@@ -19,7 +22,8 @@ const ART_SIZE: f32 = 132.0;
 /// Width of the player and equalizer windows' contents, so the classic
 /// stack (player, equalizer, playlist) lines up.
 const STACK_WIDTH: f32 = 540.0;
-const SEEK_STEP: Duration = Duration::from_secs(5);
+/// How far the arrow keys seek.
+const SEEK_STEP_SECS: f64 = 5.0;
 /// Id of the Media Library's search box, so Ctrl+F can focus it.
 const SEARCH_BOX: &str = "library_search";
 
@@ -208,9 +212,64 @@ impl UnAmpApp {
         }
     }
 
-    fn toggle_mute(&mut self) {
-        self.config.muted = !self.config.muted;
-        self.apply_volume();
+    /// Carries out a command. Every front end goes through here: the
+    /// regular windows, classic skins, keyboard shortcuts and MPRIS.
+    fn apply(&mut self, command: Command, ctx: &egui::Context) {
+        match command {
+            Command::Previous => self.previous(ctx),
+            Command::Play => self.play(ctx),
+            Command::TogglePause => self.engine.toggle_pause(),
+            Command::Stop => self.engine.stop(),
+            Command::Next => self.next(false, ctx),
+            Command::SeekTo(pos) => self.engine.seek(pos),
+            Command::SeekBy(secs) => {
+                let target = self.engine.position().as_secs_f64() + secs;
+                self.engine.seek(Duration::from_secs_f64(target.max(0.0)));
+            }
+            Command::SetVolume(volume) => {
+                self.config.volume = volume.clamp(0.0, 1.0);
+                self.config.muted = false;
+                self.apply_volume();
+            }
+            Command::ToggleMute => {
+                self.config.muted = !self.config.muted;
+                self.apply_volume();
+            }
+            Command::ToggleShuffle => self.config.shuffle = !self.config.shuffle,
+            Command::SetShuffle(on) => self.config.shuffle = on,
+            Command::CycleRepeat => self.config.repeat = self.config.repeat.next(),
+            Command::SetRepeat(repeat) => self.config.repeat = repeat,
+            Command::SetEq(snap) => {
+                self.eq.set(snap);
+                self.config.eq_enabled = snap.enabled;
+                self.config.eq_preamp = snap.preamp;
+                self.config.eq_bands = snap.gains;
+            }
+            Command::ToggleRemaining => self.config.show_remaining = !self.config.show_remaining,
+            Command::OpenWindow(w) => *self.window_open(w) = true,
+            Command::CloseWindow(w) => *self.window_open(w) = false,
+            Command::ToggleWindow(w) => {
+                let open = self.window_open(w);
+                *open = !*open;
+            }
+            Command::Playlist(action) => self.apply_playlist_action(action, ctx),
+            Command::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+            Command::Raise => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            Command::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        }
+    }
+
+    fn window_open(&mut self, window: Window) -> &mut bool {
+        match window {
+            Window::Player => &mut self.config.show_player,
+            Window::Equalizer => &mut self.config.show_equalizer,
+            Window::Playlist => &mut self.config.show_playlist,
+            Window::Library => &mut self.config.show_library,
+            Window::Waveform => &mut self.config.show_waveform,
+        }
     }
 
     /// Sends the volume to the engine, as silence while muted.
@@ -228,29 +287,21 @@ impl UnAmpApp {
         }
         let pressed = |key| ctx.input(|i| i.key_pressed(key));
         // Winamp's bottom row: Z prev, X play, C pause, V stop, B next.
-        if pressed(egui::Key::Z) {
-            self.previous(ctx);
-        }
-        if pressed(egui::Key::X) {
-            self.play(ctx);
-        }
-        if pressed(egui::Key::C) || pressed(egui::Key::Space) {
-            self.engine.toggle_pause();
-        }
-        if pressed(egui::Key::V) {
-            self.engine.stop();
-        }
-        if pressed(egui::Key::B) {
-            self.next(false, ctx);
-        }
-        if pressed(egui::Key::M) {
-            self.toggle_mute();
-        }
-        if pressed(egui::Key::ArrowRight) {
-            self.engine.seek(self.engine.position() + SEEK_STEP);
-        }
-        if pressed(egui::Key::ArrowLeft) {
-            self.engine.seek(self.engine.position().saturating_sub(SEEK_STEP));
+        let keys = [
+            (egui::Key::Z, Command::Previous),
+            (egui::Key::X, Command::Play),
+            (egui::Key::C, Command::TogglePause),
+            (egui::Key::Space, Command::TogglePause),
+            (egui::Key::V, Command::Stop),
+            (egui::Key::B, Command::Next),
+            (egui::Key::M, Command::ToggleMute),
+            (egui::Key::ArrowRight, Command::SeekBy(SEEK_STEP_SECS)),
+            (egui::Key::ArrowLeft, Command::SeekBy(-SEEK_STEP_SECS)),
+        ];
+        for (key, command) in keys {
+            if pressed(key) {
+                self.apply(command, ctx);
+            }
         }
     }
 
@@ -312,12 +363,16 @@ impl UnAmpApp {
                     ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                        ui.toggle_value(&mut self.config.show_equalizer, "EQ")
-                            .on_hover_text("Equalizer");
-                        ui.toggle_value(&mut self.config.show_playlist, "PL")
-                            .on_hover_text("Playlist");
-                        ui.toggle_value(&mut self.config.show_library, "ML")
-                            .on_hover_text("Media Library");
+                        for (window, label, hint) in [
+                            (Window::Equalizer, "EQ", "Equalizer"),
+                            (Window::Playlist, "PL", "Playlist"),
+                            (Window::Library, "ML", "Media Library"),
+                        ] {
+                            let mut open = *self.window_open(window);
+                            if ui.toggle_value(&mut open, label).on_hover_text(hint).clicked() {
+                                self.apply(Command::ToggleWindow(window), &ctx);
+                            }
+                        }
                     });
                 });
                 ui.add_space(4.0);
@@ -359,21 +414,21 @@ impl UnAmpApp {
     }
 
     fn show_time(&mut self, ui: &mut egui::Ui) {
-        let state = self.engine.state();
-        let pos = self.engine.position();
-        let text = match (state, self.config.show_remaining, self.engine.duration()) {
-            (PlayState::Stopped | PlayState::Loading, ..) => "  :  ".to_string(),
-            (_, true, Some(total)) => {
-                format!("-{}", metadata::format_duration(total.saturating_sub(pos)))
+        let shown = display::time_display(
+            self.engine.state(),
+            self.engine.position(),
+            self.engine.duration(),
+            self.config.show_remaining,
+            ui.input(|i| i.time),
+        );
+        let (text, color) = match shown {
+            display::TimeDisplay::Blank => ("  :  ".to_string(), self.palette.time),
+            // Same width as the digits, drawn invisible, so nothing shifts.
+            display::TimeDisplay::BlinkOff => ("  :  ".to_string(), egui::Color32::TRANSPARENT),
+            display::TimeDisplay::Shown { negative, time } => {
+                let sign = if negative { "-" } else { " " };
+                (format!("{sign}{}", metadata::format_duration(time)), self.palette.time)
             }
-            _ => format!(" {}", metadata::format_duration(pos)),
-        };
-        // Blink while paused, like the original.
-        let blink_off = state == PlayState::Paused && (ui.input(|i| i.time) * 2.0) as i64 % 2 == 1;
-        let color = if blink_off {
-            egui::Color32::TRANSPARENT
-        } else {
-            self.palette.time
         };
         let resp = ui
             .add(
@@ -386,7 +441,8 @@ impl UnAmpApp {
             )
             .on_hover_text("Click to toggle elapsed / remaining");
         if resp.clicked() {
-            self.config.show_remaining = !self.config.show_remaining;
+            let ctx = ui.ctx().clone();
+            self.apply(Command::ToggleRemaining, &ctx);
         }
     }
 
@@ -423,24 +479,14 @@ impl UnAmpApp {
         let duration = self.engine.duration().filter(|d| !d.is_zero());
         let fraction_at = |x: f32| ((x - rect.left()) / rect.width()).clamp(0.0, 1.0);
 
-        if let (Some(total), Some(pointer)) = (duration, resp.interact_pointer_pos()) {
-            if resp.dragged() || resp.clicked() {
-                self.seek_drag = Some(fraction_at(pointer.x));
-            }
-            if resp.drag_stopped() || resp.clicked() {
-                if let Some(f) = self.seek_drag.take() {
-                    self.engine.seek(total.mul_f32(f));
-                }
+        if let Some(total) = duration {
+            let pointer = resp.interact_pointer_pos().map(|p| fraction_at(p.x));
+            if let Some(f) = display::seek_drag(&resp, pointer, &mut self.seek_drag) {
+                let ctx = ui.ctx().clone();
+                self.apply(Command::SeekTo(total.mul_f32(f)), &ctx);
             }
         }
-
-        let fraction = match (self.seek_drag, duration) {
-            (Some(f), _) => f,
-            (None, Some(total)) => {
-                (self.engine.position().as_secs_f32() / total.as_secs_f32()).clamp(0.0, 1.0)
-            }
-            (None, None) => 0.0,
-        };
+        let fraction = display::seek_fraction(self.seek_drag, self.engine.position(), duration);
 
         let visuals = ui.visuals();
         let track = egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), 4.0));
@@ -478,24 +524,27 @@ impl UnAmpApp {
     fn show_transport(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             let big = |s: &str| egui::RichText::new(s).size(16.0);
-            if ui.button(big("\u{23EE}")).on_hover_text("Previous (Z)").clicked() {
-                self.previous(ctx);
-            }
-            if ui.button(big("\u{25B6}")).on_hover_text("Play (X)").clicked() {
-                self.play(ctx);
-            }
-            if ui.button(big("\u{23F8}")).on_hover_text("Pause (C)").clicked() {
-                self.engine.toggle_pause();
-            }
-            if ui.button(big("\u{23F9}")).on_hover_text("Stop (V)").clicked() {
-                self.engine.stop();
-            }
-            if ui.button(big("\u{23ED}")).on_hover_text("Next (B)").clicked() {
-                self.next(false, ctx);
+            let buttons = [
+                ("\u{23EE}", "Previous (Z)", Command::Previous),
+                ("\u{25B6}", "Play (X)", Command::Play),
+                ("\u{23F8}", "Pause (C)", Command::TogglePause),
+                ("\u{23F9}", "Stop (V)", Command::Stop),
+                ("\u{23ED}", "Next (B)", Command::Next),
+            ];
+            for (icon, hint, command) in buttons {
+                if ui.button(big(icon)).on_hover_text(hint).clicked() {
+                    self.apply(command, ctx);
+                }
             }
             ui.separator();
-            ui.toggle_value(&mut self.config.shuffle, big("\u{1F500}"))
-                .on_hover_text(if self.config.shuffle { "Shuffle: on" } else { "Shuffle: off" });
+            let mut shuffle = self.config.shuffle;
+            if ui
+                .toggle_value(&mut shuffle, big("\u{1F500}"))
+                .on_hover_text(if self.config.shuffle { "Shuffle: on" } else { "Shuffle: off" })
+                .clicked()
+            {
+                self.apply(Command::ToggleShuffle, ctx);
+            }
             let (icon, label) = match self.config.repeat {
                 Repeat::Off => ("\u{1F501}", "Repeat: off"),
                 Repeat::All => ("\u{1F501}", "Repeat: all"),
@@ -506,7 +555,7 @@ impl UnAmpApp {
                 .on_hover_text(format!("{label} (click to cycle)"))
                 .clicked()
             {
-                self.config.repeat = self.config.repeat.next();
+                self.apply(Command::CycleRepeat, ctx);
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -519,10 +568,7 @@ impl UnAmpApp {
                         .trailing_fill(true),
                 );
                 if resp.changed() {
-                    // Moving the slider means you want to hear it, at that level.
-                    self.config.volume = shown;
-                    self.config.muted = false;
-                    self.apply_volume();
+                    self.apply(Command::SetVolume(shown), ctx);
                 }
                 resp.on_hover_text(if self.config.muted {
                     format!("Muted (unmutes to {:.0}%)", self.config.volume * 100.0)
@@ -533,7 +579,7 @@ impl UnAmpApp {
                     .add(egui::Button::new(speaker_icon(&self.config)).frame(false))
                     .on_hover_text(if self.config.muted { "Unmute (M)" } else { "Mute (M)" });
                 if speaker.clicked() {
-                    self.toggle_mute();
+                    self.apply(Command::ToggleMute, ctx);
                 }
             });
         });
@@ -758,7 +804,7 @@ impl UnAmpApp {
                         self.reorder.is_dragging(DragList::Playlist, index),
                         egui::Sense::click_and_drag(),
                     );
-                    self.reorder.row(ui, DragList::Playlist, index, &resp);
+                    self.reorder.row_response(ui, DragList::Playlist, index, &resp);
                     if resp.double_clicked() {
                         action = Some(PlaylistAction::Play(index));
                     }
@@ -777,10 +823,13 @@ impl UnAmpApp {
                         }
                     });
                 }
-                self.reorder.autoscroll(ui, DragList::Playlist);
+                if let Some(dir) = self.reorder.edge_scroll(ui, DragList::Playlist, ui.clip_rect(), library::ROW_HEIGHT) {
+                    ui.scroll_with_delta(egui::vec2(0.0, dir * 6.0));
+                }
             });
-        if let Some((from, to)) = self.reorder.finish(ui, DragList::Playlist, output.inner_rect) {
-            self.playlist.move_track(from, to);
+        let line = ui.visuals().selection.bg_fill;
+        if let Some((from, to)) = self.reorder.finish(ui, DragList::Playlist, output.inner_rect, line) {
+            action = Some(PlaylistAction::Move { from, to });
         }
         if let Some(action) = action {
             self.apply_playlist_action(action, ctx);
@@ -823,7 +872,7 @@ impl UnAmpApp {
                         dragging,
                         egui::Sense::click_and_drag(),
                     );
-                    self.reorder.row(ui, DragList::Queue, index, &resp);
+                    self.reorder.row_response(ui, DragList::Queue, index, &resp);
                     if resp.double_clicked() {
                         action = Some(QueueAction::PlayNow(index));
                     }
@@ -839,9 +888,12 @@ impl UnAmpApp {
                         }
                     });
                 }
-                self.reorder.autoscroll(ui, DragList::Queue);
+                if let Some(dir) = self.reorder.edge_scroll(ui, DragList::Queue, ui.clip_rect(), library::ROW_HEIGHT) {
+                    ui.scroll_with_delta(egui::vec2(0.0, dir * 6.0));
+                }
             });
-        if let Some((from, to)) = self.reorder.finish(ui, DragList::Queue, output.inner_rect) {
+        let line = ui.visuals().selection.bg_fill;
+        if let Some((from, to)) = self.reorder.finish(ui, DragList::Queue, output.inner_rect, line) {
             self.playlist.move_in_queue(from, to);
         }
 
@@ -875,6 +927,7 @@ impl UnAmpApp {
                     self.playlist.add_to_queue([track]);
                 }
             }
+            PlaylistAction::Move { from, to } => self.playlist.move_track(from, to),
             PlaylistAction::Remove(index) => {
                 let was_playing = self.playlist.playing_index() == Some(index);
                 self.playlist.remove(index);
@@ -883,104 +936,6 @@ impl UnAmpApp {
                 }
             }
         }
-    }
-}
-
-/// Which list a row drag belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DragList {
-    Playlist,
-    Queue,
-}
-
-/// Drag-to-reorder for rows drawn with `ScrollArea::show_rows`: call `row`
-/// for each row, `autoscroll` at the end of the scroll area's closure, and
-/// `finish` after it, which draws the drop line and returns the move once
-/// the pointer is released.
-#[derive(Default)]
-struct Reorder {
-    /// The list and row being dragged.
-    dragging: Option<(DragList, usize)>,
-    /// The gap under the pointer this frame (0..=len) and its y position.
-    gap: Option<(usize, f32)>,
-}
-
-impl Reorder {
-    fn is_dragging(&self, list: DragList, index: usize) -> bool {
-        self.dragging == Some((list, index))
-    }
-
-    fn row(&mut self, ui: &egui::Ui, list: DragList, index: usize, resp: &egui::Response) {
-        if resp.drag_started() {
-            self.dragging = Some((list, index));
-        }
-        if self.dragging.is_some_and(|(l, _)| l == list) {
-            if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
-                if resp.rect.y_range().contains(p.y) {
-                    let below = p.y > resp.rect.center().y;
-                    let (gap, y) = if below { (index + 1, resp.rect.bottom()) } else { (index, resp.rect.top()) };
-                    self.gap = Some((gap, y));
-                }
-            }
-        }
-    }
-
-    /// Scrolls the list while a row is dragged near its top or bottom edge.
-    fn autoscroll(&self, ui: &egui::Ui, list: DragList) {
-        if !self.dragging.is_some_and(|(l, _)| l == list) {
-            return;
-        }
-        let Some(p) = ui.input(|i| i.pointer.interact_pos()) else {
-            return;
-        };
-        let clip = ui.clip_rect();
-        let edge = library::ROW_HEIGHT;
-        let speed = if p.y < clip.top() + edge {
-            6.0
-        } else if p.y > clip.bottom() - edge {
-            -6.0
-        } else {
-            return;
-        };
-        ui.scroll_with_delta(egui::vec2(0.0, speed));
-        ui.ctx().request_repaint();
-    }
-
-    fn finish(&mut self, ui: &egui::Ui, list: DragList, area: egui::Rect) -> Option<(usize, usize)> {
-        let (l, from) = self.dragging?;
-        if l != list {
-            return None;
-        }
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        let gap = self.gap.take();
-        if let Some((_, y)) = gap {
-            let stroke = egui::Stroke::new(2.0, ui.visuals().selection.bg_fill);
-            ui.painter().with_clip_rect(area.expand(2.0)).hline(area.x_range(), y, stroke);
-        }
-        if ui.input(|i| !i.pointer.any_down()) {
-            self.dragging = None;
-            let (gap, _) = gap?;
-            let to = playlist::drop_index(from, gap);
-            return (to != from).then_some((from, to));
-        }
-        None
-    }
-}
-
-/// What can be done to a playlist entry, from either playlist view.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PlaylistAction {
-    Play(usize),
-    PlayNext(usize),
-    AddToQueue(usize),
-    Remove(usize),
-}
-
-/// Winamp shows a queued playlist entry's queue position before its title.
-fn with_queue_marker(position: Option<usize>, title: String) -> String {
-    match position {
-        Some(n) => format!("[{n}] {title}"),
-        None => title,
     }
 }
 
@@ -1001,17 +956,11 @@ impl UnAmpApp {
             .map(|t| self.playlist.queue_position(&t.path))
             .collect();
         let view = classic::View {
-            state: self.engine.state(),
-            position: self.engine.position(),
-            duration: self.engine.duration(),
+            status: self.status(),
             title: &title,
             kbps: info.and_then(|i| i.bitrate_kbps),
             khz: info.and_then(|i| i.sample_rate).map(|r| r / 1000),
             channels: info.and_then(|i| i.channels),
-            volume: effective_volume(&self.config),
-            shuffle: self.config.shuffle,
-            repeat: self.config.repeat,
-            show_remaining: self.config.show_remaining,
             eq_open: self.config.show_equalizer,
             pl_open: self.config.show_playlist,
             eq: self.eq.snapshot(),
@@ -1048,46 +997,11 @@ impl UnAmpApp {
             window("classic_equalizer", row, classic::EQ_SIZE).show(ctx, |ui| classic::show_eq(ui, skin, &view, &mut actions));
         }
         if self.config.show_playlist {
-            window("classic_playlist", row * 2.0, classic::PLAYLIST_SIZE).show(ctx, |ui| classic::show_playlist(ui, skin, &view, &mut actions));
+            window("classic_playlist", row * 2.0, classic::PLAYLIST_SIZE).show(ctx, |ui| classic::show_playlist(ui, skin, &view, &mut self.reorder, &mut actions));
         }
 
-        let duration = view.duration;
-        for action in actions {
-            match action {
-                classic::Action::Previous => self.previous(ctx),
-                classic::Action::Play => self.play(ctx),
-                classic::Action::Pause => self.engine.toggle_pause(),
-                classic::Action::Stop => self.engine.stop(),
-                classic::Action::Next => self.next(false, ctx),
-                // Winamp's eject opens files; ours opens the library.
-                classic::Action::Eject => self.config.show_library = true,
-                classic::Action::Seek(f) => {
-                    if let Some(d) = duration {
-                        self.engine.seek(d.mul_f32(f));
-                    }
-                }
-                classic::Action::Volume(v) => {
-                    self.config.volume = v;
-                    self.config.muted = false;
-                    self.apply_volume();
-                }
-                classic::Action::ToggleShuffle => self.config.shuffle = !self.config.shuffle,
-                classic::Action::CycleRepeat => self.config.repeat = self.config.repeat.next(),
-                classic::Action::ToggleEq => self.config.show_equalizer = !self.config.show_equalizer,
-                classic::Action::TogglePlaylist => self.config.show_playlist = !self.config.show_playlist,
-                classic::Action::ToggleRemaining => self.config.show_remaining = !self.config.show_remaining,
-                classic::Action::ClosePlayer => self.config.show_player = false,
-                classic::Action::CloseEq => self.config.show_equalizer = false,
-                classic::Action::ClosePlaylist => self.config.show_playlist = false,
-                classic::Action::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                classic::Action::Eq(snap) => {
-                    self.eq.set(snap);
-                    self.config.eq_enabled = snap.enabled;
-                    self.config.eq_preamp = snap.preamp;
-                    self.config.eq_bands = snap.gains;
-                }
-                classic::Action::Playlist(action) => self.apply_playlist_action(action, ctx),
-            }
+        for command in actions {
+            self.apply(command, ctx);
         }
     }
 
@@ -1177,12 +1091,26 @@ impl UnAmpApp {
     }
 
     /// What media controls should show right now, and the position in µs.
+    /// The player state all front ends show, gathered in one place.
+    fn status(&self) -> display::PlayerStatus {
+        display::PlayerStatus {
+            state: self.engine.state(),
+            position: self.engine.position(),
+            duration: self.engine.duration(),
+            volume: effective_volume(&self.config),
+            shuffle: self.config.shuffle,
+            repeat: self.config.repeat,
+            show_remaining: self.config.show_remaining,
+        }
+    }
+
     fn mpris_state(&self) -> (mpris::State, i64) {
-        let state = self.engine.state();
+        let status = self.status();
+        let state = status.state;
         let current = self.engine.current().filter(|_| state != PlayState::Stopped);
         let info = self.now_info.as_ref();
         let has_lists = !self.playlist.tracks().is_empty() || !self.playlist.queue().is_empty();
-        let status = match state {
+        let playback = match state {
             PlayState::Playing => mpris::Status::Playing,
             PlayState::Paused => mpris::Status::Paused,
             // Loading is the gap between tracks; reporting it as playing
@@ -1191,74 +1119,35 @@ impl UnAmpApp {
             PlayState::Stopped => mpris::Status::Stopped,
         };
         let mpris_state = mpris::State {
-            status,
+            status: playback,
             track_id: current.map(|_| format!("/org/unamp/track/{}", self.track_serial)),
             title: current.map(|p| info.and_then(|i| i.title.clone()).unwrap_or_else(|| metadata::file_stem(p))),
             artist: info.and_then(|i| i.artist.clone()).filter(|_| current.is_some()),
             album: info.and_then(|i| i.album.clone()).filter(|_| current.is_some()),
-            length_us: self.engine.duration().filter(|_| current.is_some()).map(|d| d.as_micros() as i64),
+            length_us: status.duration.filter(|_| current.is_some()).map(|d| d.as_micros() as i64),
             art_url: self.art_url.clone().filter(|_| current.is_some()),
-            volume: effective_volume(&self.config) as f64,
-            shuffle: self.config.shuffle,
-            repeat: self.config.repeat,
+            volume: status.volume as f64,
+            shuffle: status.shuffle,
+            repeat: status.repeat,
             can_go_next: has_lists,
             can_go_previous: current.is_some(),
             can_play: current.is_some() || has_lists || !self.library.visible_tracks().is_empty(),
-            can_seek: current.is_some() && self.engine.duration().is_some(),
+            can_seek: current.is_some() && status.duration.is_some(),
         };
-        (mpris_state, self.engine.position().as_micros() as i64)
+        (mpris_state, status.position.as_micros() as i64)
     }
 
-    /// Carries out a command from GNOME's media controls, media keys, etc.
-    fn apply_mpris(&mut self, command: mpris::Command, ctx: &egui::Context) {
-        use mpris::Command as C;
-        let state = self.engine.state();
-        match command {
-            C::PlayPause => match state {
-                PlayState::Playing | PlayState::Paused => self.engine.toggle_pause(),
-                PlayState::Stopped => self.play(ctx),
-                PlayState::Loading => {}
-            },
-            C::Play => match state {
-                PlayState::Paused => self.engine.toggle_pause(),
-                PlayState::Stopped => self.play(ctx),
-                _ => {}
-            },
-            C::Pause => {
-                if state == PlayState::Playing {
-                    self.engine.toggle_pause();
-                }
-            }
-            C::Stop => self.engine.stop(),
-            C::Next => self.next(false, ctx),
-            C::Previous => self.previous(ctx),
-            C::Seek(offset_us) => {
-                let target = self.engine.position().as_micros() as i64 + offset_us;
-                match self.engine.duration() {
-                    // Seeking past the end moves to the next track, per the spec.
-                    Some(d) if target > d.as_micros() as i64 => self.next(false, ctx),
-                    _ => self.engine.seek(Duration::from_micros(target.max(0) as u64)),
-                }
-            }
-            C::SetPosition(track_id, position_us) => {
-                let current_id = format!("/org/unamp/track/{}", self.track_serial);
-                let in_range = self.engine.duration().is_some_and(|d| position_us <= d.as_micros() as i64);
-                if track_id == current_id && position_us >= 0 && in_range {
-                    self.engine.seek(Duration::from_micros(position_us as u64));
-                }
-            }
-            C::Raise => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-            C::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            C::SetVolume(volume) => {
-                self.config.volume = volume as f32;
-                self.config.muted = false;
-                self.apply_volume();
-            }
-            C::SetShuffle(on) => self.config.shuffle = on,
-            C::SetRepeat(repeat) => self.config.repeat = repeat,
+    /// Carries out a request from GNOME's media controls, media keys, etc.
+    fn apply_mpris(&mut self, request: mpris::Command, ctx: &egui::Context) {
+        let track_id = format!("/org/unamp/track/{}", self.track_serial);
+        let now = mpris::Playback {
+            state: self.engine.state(),
+            position: self.engine.position(),
+            duration: self.engine.duration(),
+            track_id: Some(&track_id),
+        };
+        if let Some(command) = mpris::to_player_command(request, &now) {
+            self.apply(command, ctx);
         }
     }
 
@@ -1290,7 +1179,7 @@ impl UnAmpApp {
         let position = self.engine.position().as_secs_f64();
         if let Some(target) = waveform::show(ui, &wf, total, position, &colors) {
             drop(wf);
-            self.engine.seek(Duration::from_secs_f64(target));
+            self.apply(Command::SeekTo(Duration::from_secs_f64(target)), ctx);
         }
     }
 
@@ -1374,10 +1263,8 @@ impl UnAmpApp {
         });
 
         if snap != before {
-            self.eq.set(snap);
-            self.config.eq_enabled = snap.enabled;
-            self.config.eq_preamp = snap.preamp;
-            self.config.eq_bands = snap.gains;
+            let ctx = ui.ctx().clone();
+            self.apply(Command::SetEq(snap), &ctx);
         }
     }
 }
@@ -1417,12 +1304,13 @@ fn eq_curve(ui: &mut egui::Ui, snap: &EqSnapshot, sample_rate: f32) {
 
     let (lo, hi) = (20f32.ln(), 20_000f32.ln());
     let x_for = |f: f32| rect.left() + (f.ln() - lo) / (hi - lo) * rect.width();
+    let at = |i: usize| eq::graph_freq(i as f32 / 96.0);
     for f in eq::FREQS {
         painter.vline(x_for(f), rect.y_range(), egui::Stroke::new(1.0, visuals.faint_bg_color));
     }
     let points: Vec<egui::Pos2> = (0..=96)
         .map(|i| {
-            let f = (lo + (hi - lo) * i as f32 / 96.0).exp();
+            let f = at(i);
             egui::pos2(x_for(f), y_for(eq::response_db(snap, f, sample_rate)))
         })
         .collect();
@@ -1546,11 +1434,18 @@ impl eframe::App for UnAmpApp {
             .show(ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("Windows", |ui| {
-                        ui.checkbox(&mut self.config.show_player, "Player");
-                        ui.checkbox(&mut self.config.show_equalizer, "Equalizer");
-                        ui.checkbox(&mut self.config.show_playlist, "Playlist");
-                        ui.checkbox(&mut self.config.show_library, "Media Library");
-                        ui.checkbox(&mut self.config.show_waveform, "Waveform");
+                        for (window, label) in [
+                            (Window::Player, "Player"),
+                            (Window::Equalizer, "Equalizer"),
+                            (Window::Playlist, "Playlist"),
+                            (Window::Library, "Media Library"),
+                            (Window::Waveform, "Waveform"),
+                        ] {
+                            let mut open = *self.window_open(window);
+                            if ui.checkbox(&mut open, label).clicked() {
+                                self.apply(Command::ToggleWindow(window), ctx);
+                            }
+                        }
                         ui.separator();
                         if ui.button("Reset layout").clicked() {
                             ctx.memory_mut(|m| m.reset_areas());
@@ -1705,86 +1600,6 @@ mod tests {
         assert_eq!(effective_volume(&muted), 0.0);
         assert_eq!(muted.volume, 0.7);
         assert_eq!(effective_volume(&config(0.7, false)), 0.7);
-    }
-
-    /// Runs one headless egui frame of a 5-row draggable list, returning
-    /// each row's rect and the move `finish` reported, if any.
-    fn drag_frame(
-        ctx: &egui::Context,
-        reorder: &mut Reorder,
-        events: Vec<egui::Event>,
-        time: f64,
-    ) -> (Vec<egui::Rect>, Option<(usize, usize)>) {
-        let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
-            time: Some(time),
-            events,
-            ..Default::default()
-        };
-        let (mut rects, mut moved) = (Vec::new(), None);
-        let _ = ctx.run_ui(input, |ui| {
-            let output = egui::ScrollArea::vertical().show_rows(ui, library::ROW_HEIGHT, 5, |ui, range| {
-                for i in range {
-                    let resp = library::track_row(ui, i, "track", None, false, false, egui::Sense::click_and_drag());
-                    reorder.row(ui, DragList::Playlist, i, &resp);
-                    rects.push(resp.rect);
-                }
-            });
-            moved = reorder.finish(ui, DragList::Playlist, output.inner_rect);
-        });
-        (rects, moved)
-    }
-
-    #[test]
-    fn dragging_a_row_and_releasing_reports_the_move() {
-        let ctx = egui::Context::default();
-        let mut reorder = Reorder::default();
-        let (rects, _) = drag_frame(&ctx, &mut reorder, vec![], 0.0);
-        let grab = rects[0].center();
-        // Lower half of row 2: the gap after it, so row 0 lands at index 2.
-        let drop = egui::pos2(grab.x, rects[2].center().y + 4.0);
-        let button = |pos, pressed| egui::Event::PointerButton {
-            pos,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::default(),
-        };
-
-        let steps = [
-            vec![egui::Event::PointerMoved(grab), button(grab, true)],
-            vec![egui::Event::PointerMoved(grab + egui::vec2(0.0, 10.0))],
-            vec![egui::Event::PointerMoved(rects[1].center())],
-            vec![egui::Event::PointerMoved(drop)],
-            vec![egui::Event::PointerMoved(drop)],
-            vec![button(drop, false)],
-        ];
-        let mut moved = None;
-        for (i, events) in steps.into_iter().enumerate() {
-            let (_, m) = drag_frame(&ctx, &mut reorder, events, 0.1 * (i + 1) as f64);
-            moved = moved.or(m);
-        }
-        assert_eq!(moved, Some((0, 2)));
-        assert!(reorder.dragging.is_none(), "drag ends on release");
-    }
-
-    #[test]
-    fn a_plain_click_is_not_a_move() {
-        let ctx = egui::Context::default();
-        let mut reorder = Reorder::default();
-        let (rects, _) = drag_frame(&ctx, &mut reorder, vec![], 0.0);
-        let at = rects[1].center();
-        let button = |pressed| egui::Event::PointerButton {
-            pos: at,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: egui::Modifiers::default(),
-        };
-        let mut moved = None;
-        for (i, events) in [vec![egui::Event::PointerMoved(at), button(true)], vec![button(false)]].into_iter().enumerate() {
-            let (_, m) = drag_frame(&ctx, &mut reorder, events, 0.1 * (i + 1) as f64);
-            moved = moved.or(m);
-        }
-        assert_eq!(moved, None);
     }
 
     #[test]

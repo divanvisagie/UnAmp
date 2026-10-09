@@ -10,7 +10,7 @@ use std::path::Path;
 
 use egui::{Color32, Pos2, Rect, TextureHandle, Vec2};
 
-pub use windows::{Action, View, show_eq, show_player, show_playlist};
+pub use windows::{View, show_eq, show_player, show_playlist};
 
 /// Screen points per skin pixel ("double size" mode).
 pub const SCALE: f32 = 2.0;

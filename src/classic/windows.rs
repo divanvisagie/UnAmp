@@ -6,7 +6,9 @@ use std::time::Duration;
 use egui::{Color32, Pos2, Rect, Sense, Vec2};
 
 use super::{Bmp, ClassicSkin, EQ_SIZE, MAIN_SIZE, PLAYLIST_SIZE, SCALE};
-use crate::app::PlaylistAction;
+use crate::command::{Command, PlaylistAction, Window, with_queue_marker};
+use crate::display::{self, PlayerStatus};
+use crate::reorder::{DragList, Reorder};
 use crate::config::Repeat;
 use crate::eq::{self, EqSnapshot};
 use crate::library::Track;
@@ -15,18 +17,13 @@ use crate::visualizer;
 
 /// Everything the classic windows show, borrowed from the app per frame.
 pub struct View<'a> {
-    pub state: PlayState,
-    pub position: Duration,
-    pub duration: Option<Duration>,
+    /// Playback state, volume, shuffle/repeat, time display mode.
+    pub status: PlayerStatus,
     /// Ticker text, e.g. "1. Artist - Title (3:20)".
     pub title: &'a str,
     pub kbps: Option<u32>,
     pub khz: Option<u32>,
     pub channels: Option<u8>,
-    pub volume: f32,
-    pub shuffle: bool,
-    pub repeat: Repeat,
-    pub show_remaining: bool,
     pub eq_open: bool,
     pub pl_open: bool,
     pub eq: EqSnapshot,
@@ -42,28 +39,6 @@ pub struct View<'a> {
     pub time: f64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Action {
-    Previous,
-    Play,
-    Pause,
-    Stop,
-    Next,
-    Eject,
-    Seek(f32),
-    Volume(f32),
-    ToggleShuffle,
-    CycleRepeat,
-    ToggleEq,
-    TogglePlaylist,
-    ToggleRemaining,
-    ClosePlayer,
-    CloseEq,
-    ClosePlaylist,
-    Minimize,
-    Eq(EqSnapshot),
-    Playlist(crate::app::PlaylistAction),
-}
 
 /// Fills a rectangle given in skin pixels.
 fn px(painter: &egui::Painter, origin: Pos2, rect: [f32; 4], color: Color32) {
@@ -99,7 +74,7 @@ fn pointer_skin(ui: &egui::Ui, origin: Pos2) -> Option<Vec2> {
     ui.input(|i| i.pointer.interact_pos()).map(|p| (p - origin) / SCALE)
 }
 
-pub fn show_player(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Vec<Action>) {
+pub fn show_player(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Vec<Command>) {
     let (rect, _) = ui.allocate_exact_size(MAIN_SIZE * SCALE, Sense::hover());
     let o = rect.min;
     let p = ui.painter_at(rect);
@@ -110,20 +85,20 @@ pub fn show_player(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mu
 
     // Title-bar buttons.
     if button(ui, skin, &p, o, id.with("min"), Bmp::Titlebar, [244.0, 3.0], [9, 9], [9, 0], [9, 9]).clicked() {
-        out.push(Action::Minimize);
+        out.push(Command::Minimize);
     }
     if button(ui, skin, &p, o, id.with("close"), Bmp::Titlebar, [264.0, 3.0], [9, 9], [18, 0], [18, 9]).clicked() {
-        out.push(Action::ClosePlayer);
+        out.push(Command::CloseWindow(Window::Player));
     }
 
     // Play / pause / stop indicator and the "working" sliver beside it.
-    let status_x = match v.state {
+    let status_x = match v.status.state {
         PlayState::Playing | PlayState::Loading => 0,
         PlayState::Paused => 9,
         PlayState::Stopped => 18,
     };
     skin.sprite(&p, o, Bmp::Playpaus, [status_x, 0, 9, 9], [26.0, 28.0]);
-    let working = if v.state == PlayState::Playing { 39 } else { 36 };
+    let working = if v.status.state == PlayState::Playing { 39 } else { 36 };
     skin.sprite(&p, o, Bmp::Playpaus, [working, 0, 3, 9], [24.0, 28.0]);
 
     draw_time(ui, skin, &p, o, id, v, out);
@@ -148,18 +123,18 @@ pub fn show_player(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mu
     }
 
     // Mono / stereo lights.
-    let stereo = v.channels.is_some_and(|c| c >= 2) && v.state != PlayState::Stopped;
-    let mono = v.channels == Some(1) && v.state != PlayState::Stopped;
+    let stereo = v.channels.is_some_and(|c| c >= 2) && v.status.state != PlayState::Stopped;
+    let mono = v.channels == Some(1) && v.status.state != PlayState::Stopped;
     skin.sprite(&p, o, Bmp::Monoster, [29, if mono { 0 } else { 12 }, 27, 12], [212.0, 41.0]);
     skin.sprite(&p, o, Bmp::Monoster, [0, if stereo { 0 } else { 12 }, 29, 12], [239.0, 41.0]);
 
     // Volume slider: 28 background frames, thumb only if the bitmap has one.
     let vol_resp = ClassicSkin::hit(ui, o, id.with("volume"), [107.0, 57.0, 68.0, 13.0], Sense::click_and_drag());
-    let mut volume = v.volume;
+    let mut volume = v.status.volume;
     if vol_resp.is_pointer_button_down_on() {
         if let Some(pt) = pointer_skin(ui, o) {
             volume = ((pt.x - 107.0 - 7.0) / 54.0).clamp(0.0, 1.0);
-            out.push(Action::Volume(volume));
+            out.push(Command::SetVolume(volume));
         }
     }
     let frame = (volume * 27.0).round() as u32;
@@ -184,7 +159,7 @@ pub fn show_player(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mu
         [x, y, 23, 12]
     }, [219.0, 58.0]);
     if eq_resp.clicked() {
-        out.push(Action::ToggleEq);
+        out.push(Command::ToggleWindow(Window::Equalizer));
     }
     let pl_resp = ClassicSkin::hit(ui, o, id.with("pl"), [242.0, 58.0, 23.0, 12.0], Sense::click());
     skin.sprite(&p, o, Bmp::Shufrep, {
@@ -192,28 +167,19 @@ pub fn show_player(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mu
         [x, y, 23, 12]
     }, [242.0, 58.0]);
     if pl_resp.clicked() {
-        out.push(Action::TogglePlaylist);
+        out.push(Command::ToggleWindow(Window::Playlist));
     }
 
     // Position bar.
     skin.sprite(&p, o, Bmp::Posbar, [0, 0, 248, 10], [16.0, 72.0]);
-    let seekable = v.duration.is_some() && matches!(v.state, PlayState::Playing | PlayState::Paused);
+    let seekable = v.status.duration.is_some() && matches!(v.status.state, PlayState::Playing | PlayState::Paused);
     let pos_resp = ClassicSkin::hit(ui, o, id.with("posbar"), [16.0, 72.0, 248.0, 10.0], Sense::click_and_drag());
     if seekable {
-        if pos_resp.is_pointer_button_down_on() {
-            if let Some(pt) = pointer_skin(ui, o) {
-                skin.seek_drag = Some(((pt.x - 16.0 - 14.5) / 219.0).clamp(0.0, 1.0));
-            }
+        let pointer = pointer_skin(ui, o).map(|pt| (pt.x - 16.0 - 14.5) / 219.0);
+        if let (Some(f), Some(total)) = (display::seek_drag(&pos_resp, pointer, &mut skin.seek_drag), v.status.duration) {
+            out.push(Command::SeekTo(total.mul_f32(f)));
         }
-        if pos_resp.drag_stopped() || pos_resp.clicked() {
-            if let Some(f) = skin.seek_drag.take() {
-                out.push(Action::Seek(f));
-            }
-        }
-        let fraction = skin.seek_drag.unwrap_or_else(|| match v.duration {
-            Some(d) if !d.is_zero() => (v.position.as_secs_f32() / d.as_secs_f32()).clamp(0.0, 1.0),
-            _ => 0.0,
-        });
+        let fraction = display::seek_fraction(skin.seek_drag, v.status.position, v.status.duration);
         let thumb = if pos_resp.is_pointer_button_down_on() { 278 } else { 248 };
         skin.sprite(&p, o, Bmp::Posbar, [thumb, 0, 29, 10], [16.0 + fraction * 219.0, 72.0]);
     } else {
@@ -221,12 +187,12 @@ pub fn show_player(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mu
     }
 
     // Transport.
-    let transport: [(&str, f32, u32, u32, Action); 5] = [
-        ("prev", 16.0, 0, 23, Action::Previous),
-        ("play", 39.0, 23, 23, Action::Play),
-        ("pause", 62.0, 46, 23, Action::Pause),
-        ("stop", 85.0, 69, 23, Action::Stop),
-        ("next", 108.0, 92, 22, Action::Next),
+    let transport: [(&str, f32, u32, u32, Command); 5] = [
+        ("prev", 16.0, 0, 23, Command::Previous),
+        ("play", 39.0, 23, 23, Command::Play),
+        ("pause", 62.0, 46, 23, Command::TogglePause),
+        ("stop", 85.0, 69, 23, Command::Stop),
+        ("next", 108.0, 92, 22, Command::Next),
     ];
     for (name, x, sx, w, action) in transport {
         if button(ui, skin, &p, o, id.with(name), Bmp::Cbuttons, [x, 88.0], [w, 18], [sx, 0], [sx, 18]).clicked() {
@@ -234,7 +200,8 @@ pub fn show_player(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mu
         }
     }
     if button(ui, skin, &p, o, id.with("eject"), Bmp::Cbuttons, [136.0, 89.0], [22, 16], [114, 0], [114, 16]).clicked() {
-        out.push(Action::Eject);
+        // Winamp's eject opens files; ours opens the library.
+        out.push(Command::OpenWindow(Window::Library));
     }
 
     // Shuffle and repeat.
@@ -245,19 +212,19 @@ pub fn show_player(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mu
         (true, true) => 45,
     };
     let sh = ClassicSkin::hit(ui, o, id.with("shuffle"), [164.0, 89.0, 47.0, 15.0], Sense::click());
-    skin.sprite(&p, o, Bmp::Shufrep, [28, state_y(v.shuffle, sh.is_pointer_button_down_on()), 47, 15], [164.0, 89.0]);
+    skin.sprite(&p, o, Bmp::Shufrep, [28, state_y(v.status.shuffle, sh.is_pointer_button_down_on()), 47, 15], [164.0, 89.0]);
     if sh.clicked() {
-        out.push(Action::ToggleShuffle);
+        out.push(Command::ToggleShuffle);
     }
     let rp = ClassicSkin::hit(ui, o, id.with("repeat"), [210.0, 89.0, 28.0, 15.0], Sense::click());
-    skin.sprite(&p, o, Bmp::Shufrep, [0, state_y(v.repeat != Repeat::Off, rp.is_pointer_button_down_on()), 28, 15], [210.0, 89.0]);
-    let rp = rp.on_hover_text(match v.repeat {
+    skin.sprite(&p, o, Bmp::Shufrep, [0, state_y(v.status.repeat != Repeat::Off, rp.is_pointer_button_down_on()), 28, 15], [210.0, 89.0]);
+    let rp = rp.on_hover_text(match v.status.repeat {
         Repeat::Off => "Repeat: off",
         Repeat::All => "Repeat: all",
         Repeat::One => "Repeat: one",
     });
     if rp.clicked() {
-        out.push(Action::CycleRepeat);
+        out.push(Command::CycleRepeat);
     }
 }
 
@@ -268,22 +235,18 @@ fn draw_time(
     o: Pos2,
     id: egui::Id,
     v: &View,
-    out: &mut Vec<Action>,
+    out: &mut Vec<Command>,
 ) {
     if ClassicSkin::hit(ui, o, id.with("time"), [36.0, 26.0, 63.0, 13.0], Sense::click()).clicked() {
-        out.push(Action::ToggleRemaining);
+        out.push(Command::ToggleRemaining);
     }
-    if matches!(v.state, PlayState::Stopped | PlayState::Loading) {
+    // Winamp shows nothing when stopped and blinks the digits while paused.
+    let display::TimeDisplay::Shown { negative, time } =
+        display::time_display(v.status.state, v.status.position, v.status.duration, v.status.show_remaining, v.time)
+    else {
         return;
-    }
-    // Winamp blinks the digits while paused.
-    if v.state == PlayState::Paused && (v.time * 2.0) as i64 % 2 == 1 {
-        return;
-    }
-    let (secs, negative) = match (v.show_remaining, v.duration) {
-        (true, Some(total)) => (total.saturating_sub(v.position).as_secs(), true),
-        _ => (v.position.as_secs(), false),
     };
+    let secs = time.as_secs();
     let (mins, secs) = ((secs / 60) % 100, secs % 60);
     let digits = [mins / 10, mins % 10, secs / 10, secs % 10];
     let (bmp, extended) = if skin.has(Bmp::NumsEx) { (Bmp::NumsEx, true) } else { (Bmp::Numbers, false) };
@@ -321,7 +284,7 @@ fn draw_visualizer(skin: &ClassicSkin, p: &egui::Painter, o: Pos2, v: &View) {
     }
 }
 
-pub fn show_eq(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Vec<Action>) {
+pub fn show_eq(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Vec<Command>) {
     let (rect, _) = ui.allocate_exact_size(EQ_SIZE * SCALE, Sense::hover());
     let o = rect.min;
     let p = ui.painter_at(rect);
@@ -331,7 +294,7 @@ pub fn show_eq(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Ve
     skin.sprite(&p, o, Bmp::Eqmain, [0, 0, 275, 116], [0.0, 0.0]);
     skin.sprite(&p, o, Bmp::Eqmain, [0, 134, 275, 14], [0.0, 0.0]);
     if button(ui, skin, &p, o, id.with("close"), Bmp::Eqmain, [264.0, 3.0], [9, 9], [0, 116], [0, 125]).clicked() {
-        out.push(Action::CloseEq);
+        out.push(Command::CloseWindow(Window::Equalizer));
     }
 
     // ON toggle; AUTO is drawn but does nothing, as in most players.
@@ -365,13 +328,13 @@ pub fn show_eq(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Ve
 
     // Response graph in the skin's own line colours, preamp as a flat line.
     skin.sprite(&p, o, Bmp::Eqmain, [0, 294, 113, 19], [86.0, 17.0]);
-    let row_for = |db: f32| ((1.0 - (db + eq::MAX_DB) / (2.0 * eq::MAX_DB)) * 18.0).round().clamp(0.0, 18.0) as usize;
+    // Graph rows: 0 is +MAX_DB at the top, 18 is −MAX_DB at the bottom.
+    let row_for = |db: f32| ((1.0 - eq::level(db)) * 18.0).round() as usize;
     skin.sprite(&p, o, Bmp::Eqmain, [0, 314, 113, 1], [86.0, 17.0 + row_for(snap.preamp) as f32]);
     let bands_only = EqSnapshot { preamp: 0.0, ..snap };
-    let (lo, hi) = (20f32.ln(), 20_000f32.ln());
     let mut prev: Option<usize> = None;
     for x in 0..113 {
-        let f = (lo + (hi - lo) * x as f32 / 112.0).exp();
+        let f = eq::graph_freq(x as f32 / 112.0);
         let row = row_for(eq::response_db(&bands_only, f, 44_100.0));
         let (a, b) = match prev {
             Some(pr) => (pr.min(row), pr.max(row)),
@@ -390,11 +353,11 @@ pub fn show_eq(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Ve
             *value = 0.0;
         } else if resp.is_pointer_button_down_on() {
             if let Some(pt) = pointer_skin(ui, o) {
-                let t = ((pt.y - 38.0 - 5.5) / 52.0).clamp(0.0, 1.0);
-                *value = ((1.0 - t) * 2.0 - 1.0) * eq::MAX_DB;
+                let t = (pt.y - 38.0 - 5.5) / 52.0;
+                *value = eq::db_at_level(1.0 - t);
             }
         }
-        let level = ((*value + eq::MAX_DB) / (2.0 * eq::MAX_DB)).clamp(0.0, 1.0);
+        let level = eq::level(*value);
         let frame = (level * 27.0).round() as u32;
         skin.sprite(&p, o, Bmp::Eqmain, [13 + (frame % 14) * 15, 164 + (frame / 14) * 65, 14, 63], [x, 38.0]);
         let thumb_y = if resp.is_pointer_button_down_on() { 176 } else { 164 };
@@ -407,11 +370,11 @@ pub fn show_eq(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Ve
     }
 
     if snap != v.eq {
-        out.push(Action::Eq(snap));
+        out.push(Command::SetEq(snap));
     }
 }
 
-pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Vec<Action>) {
+pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, reorder: &mut Reorder, out: &mut Vec<Command>) {
     let size = PLAYLIST_SIZE;
     let (w, h) = (size.x, size.y);
     let (rect, _) = ui.allocate_exact_size(size * SCALE, Sense::hover());
@@ -448,13 +411,13 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
         skin.sprite(&p, o, Bmp::Pledit, [52, 42, 9, 9], [w - 11.0, 3.0]);
     }
     if close.clicked() {
-        out.push(Action::ClosePlaylist);
+        out.push(Command::CloseWindow(Window::Playlist));
     }
 
     // Track list, in pledit.txt's colours at Winamp's 13px row height.
     let list = [12.0, 20.0, w - 20.0 - 12.0, h - 38.0 - 20.0];
     px(&p, o, list, skin.pl.normal_bg);
-    let list_resp = ClassicSkin::hit(ui, o, id.with("list"), list, Sense::click());
+    let list_resp = ClassicSkin::hit(ui, o, id.with("list"), list, Sense::click_and_drag());
     let row_h = 13.0;
     let visible = (list[3] / row_h).floor() as usize;
     let max_scroll = v.tracks.len().saturating_sub(visible) as f32;
@@ -471,7 +434,7 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
             if index < v.tracks.len() {
                 skin.playlist_selected = Some(index);
                 if list_resp.double_clicked() {
-                    out.push(Action::Playlist(PlaylistAction::Play(index)));
+                    out.push(Command::Playlist(PlaylistAction::Play(index)));
                 }
             }
         }
@@ -489,7 +452,7 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
             ("\u{2796} Remove", PlaylistAction::Remove(index)),
         ] {
             if ui.button(label).clicked() {
-                out.push(Action::Playlist(action));
+                out.push(Command::Playlist(action));
             }
         }
     });
@@ -516,8 +479,8 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
         .and_then(|t| t.duration())
         .unwrap_or_default();
     skin.text(&p, o, &format!("{}/{}", fmt(selected), fmt(v.total)), [w - 150.0 + 7.0, h - 38.0 + 10.0], 80.0, 0.0);
-    let mini = match v.state {
-        PlayState::Playing | PlayState::Paused => fmt(v.position),
+    let mini = match v.status.state {
+        PlayState::Playing | PlayState::Paused => fmt(v.status.position),
         _ => "  :  ".to_string(),
     };
     skin.text(&p, o, &format!("{mini:>5}"), [w - 150.0 + 66.0, h - 38.0 + 23.0], 25.0, 0.0);
@@ -525,10 +488,16 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
     let list_rect = Rect::from_min_size(o + Vec2::new(list[0], list[1]) * SCALE, Vec2::new(list[2], list[3]) * SCALE);
     let text_painter = p.with_clip_rect(list_rect);
     let font = egui::FontId::proportional(9.0 * SCALE);
+    let press = ui.input(|i| i.pointer.press_origin());
     for (row, index) in (first..v.tracks.len()).take(visible + 1).enumerate() {
         let track = &v.tracks[index];
         let top = list[1] + row as f32 * row_h;
-        if skin.playlist_selected == Some(index) {
+        // Drag to reorder, through the same helper as the regular playlist.
+        let row_rect = Rect::from_min_size(o + Vec2::new(list[0], top) * SCALE, Vec2::new(list[2], row_h) * SCALE);
+        let started = list_resp.drag_started() && press.is_some_and(|p| row_rect.contains(p));
+        reorder.row(ui, DragList::Playlist, index, row_rect, started);
+        let highlighted = skin.playlist_selected == Some(index) || reorder.is_dragging(DragList::Playlist, index);
+        if highlighted {
             px(&text_painter, o, [list[0], top, list[2], row_h], skin.pl.selected_bg);
         }
         let color = if v.current == Some(index) { skin.pl.current } else { skin.pl.normal };
@@ -536,10 +505,7 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
         text_painter.text(
             Pos2::new(o.x + (list[0] + 2.0) * SCALE, y),
             egui::Align2::LEFT_CENTER,
-            match v.queued.get(index).copied().flatten() {
-                Some(n) => format!("{}. [{n}] {}", index + 1, track.title()),
-                None => format!("{}. {}", index + 1, track.title()),
-            },
+            format!("{}. {}", index + 1, with_queue_marker(v.queued.get(index).copied().flatten(), track.title())),
             font.clone(),
             color,
         );
@@ -548,7 +514,7 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
             let time = crate::metadata::format_duration(d);
             let galley = text_painter.layout_no_wrap(time, font.clone(), color);
             let right = o.x + (list[0] + list[2] - 2.0) * SCALE;
-            let bg = if skin.playlist_selected == Some(index) { skin.pl.selected_bg } else { skin.pl.normal_bg };
+            let bg = if highlighted { skin.pl.selected_bg } else { skin.pl.normal_bg };
             text_painter.rect_filled(
                 Rect::from_min_max(
                     Pos2::new(right - galley.size().x - 6.0, y - row_h * SCALE / 2.0),
@@ -559,5 +525,11 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
             );
             text_painter.galley(Pos2::new(right - galley.size().x, y - galley.size().y / 2.0), galley, color);
         }
+    }
+    if let Some(dir) = reorder.edge_scroll(ui, DragList::Playlist, list_rect, row_h * SCALE) {
+        skin.playlist_scroll = (skin.playlist_scroll - dir * 0.25).clamp(0.0, max_scroll);
+    }
+    if let Some((from, to)) = reorder.finish(ui, DragList::Playlist, list_rect, skin.pl.current) {
+        out.push(Command::Playlist(PlaylistAction::Move { from, to }));
     }
 }

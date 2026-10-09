@@ -1,6 +1,8 @@
 mod app;
 mod classic;
+mod command;
 mod config;
+mod display;
 mod eq;
 mod library;
 mod locations;
@@ -8,6 +10,7 @@ mod metadata;
 mod mpris;
 mod player;
 mod playlist;
+mod reorder;
 mod search;
 mod session;
 mod skin;
