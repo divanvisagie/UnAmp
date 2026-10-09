@@ -383,26 +383,37 @@ impl Library {
             ui.centered_and_justified(|ui| ui.label(err.as_str()));
             return None;
         }
-        if !searching && self.tracks.is_empty() {
-            ui.centered_and_justified(|ui| {
-                ui.label(if self.subdirs.is_empty() {
-                    "No music in this folder"
-                } else {
-                    "No music here — pick a folder on the left"
-                })
-            });
+        if !searching && self.tracks.is_empty() && self.subdirs.is_empty() {
+            ui.centered_and_justified(|ui| ui.label("This folder is empty"));
             return None;
         }
 
         let mut action = None;
+        let mut open_folder = None;
         let list: &[Track] = if searching { &self.search.tracks } else { &self.tracks };
+        // A folder's subfolders come first, so an artist folder with only
+        // albums in it isn't a dead end. (Search shows matching folders above.)
+        let folders: &[(PathBuf, String)] = if searching { &[] } else { &self.subdirs };
         let root = self.tree.root();
         let selected = &mut self.selected;
         egui::ScrollArea::vertical()
             .id_salt(if searching { "search_rows" } else { "folder_rows" })
             .auto_shrink([false, false])
-            .show_rows(ui, ROW_HEIGHT, list.len(), |ui, range| {
-                for index in range {
+            .show_rows(ui, ROW_HEIGHT, folders.len() + list.len(), |ui, range| {
+                for row in range {
+                    if let Some((path, name)) = folders.get(row) {
+                        let resp = folder_row(ui, row, name).on_hover_text(path.display().to_string());
+                        if resp.clicked() {
+                            open_folder = Some(path.clone());
+                        }
+                        resp.context_menu(|ui| {
+                            if ui.button("\u{1F4C2} Open").clicked() {
+                                open_folder = Some(path.clone());
+                            }
+                        });
+                        continue;
+                    }
+                    let index = row - folders.len();
                     let track = &list[index];
                     // Results come from all over, so show where each one lives.
                     let title = match track.path.parent().and_then(|p| p.strip_prefix(root).ok()) {
@@ -440,8 +451,34 @@ impl Library {
                     });
                 }
             });
+        if let Some(path) = open_folder {
+            self.navigate(path);
+        }
         action
     }
+}
+
+/// A subfolder row in the track list: folder icon and name, opened with
+/// a single click like the tree.
+fn folder_row(ui: &mut egui::Ui, row: usize, name: &str) -> egui::Response {
+    let width = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), egui::Sense::click());
+    let visuals = ui.visuals();
+    let painter = ui.painter_at(rect);
+    if resp.hovered() {
+        painter.rect_filled(rect, visuals.widgets.inactive.corner_radius, visuals.widgets.hovered.weak_bg_fill);
+    } else if row % 2 == 1 {
+        painter.rect_filled(rect, 0.0, visuals.faint_bg_color);
+    }
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    painter.text(
+        egui::pos2(rect.left() + 54.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format!("\u{1F4C1} {name}"),
+        body,
+        visuals.text_color(),
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// One list row: number, title and duration, highlighted when it's the

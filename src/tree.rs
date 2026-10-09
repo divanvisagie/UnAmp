@@ -58,7 +58,7 @@ impl FolderTree {
         self.root_label = label;
     }
 
-    /// Opens the folders leading to `path` and scrolls it into view.
+    /// Opens `path` and the folders leading to it, and scrolls it into view.
     pub fn reveal(&mut self, path: &Path) {
         self.reveal = path.starts_with(&self.root).then(|| path.to_path_buf());
     }
@@ -112,7 +112,9 @@ impl FolderTree {
     ) {
         let id = ui.make_persistent_id(("folder_tree", path));
         let mut state = CollapsingState::load_with_default_open(ui.ctx(), id, is_root);
-        let revealing = self.reveal.as_deref().is_some_and(|r| r.starts_with(path) && r != path);
+        // Opens the folders leading to the revealed one, and that folder
+        // itself, so clicking a folder both selects and expands it.
+        let revealing = self.reveal.as_deref().is_some_and(|r| r.starts_with(path));
         if revealing && !state.is_open() {
             state.set_open(true);
         }
