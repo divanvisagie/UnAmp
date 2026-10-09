@@ -45,6 +45,8 @@ pub struct AppConfig {
     pub show_equalizer: bool,
     pub show_playlist: bool,
     pub show_library: bool,
+    /// The Waveform window; off unless turned on from the Windows menu.
+    pub show_waveform: bool,
 }
 
 impl Default for AppConfig {
@@ -65,6 +67,7 @@ impl Default for AppConfig {
             show_equalizer: true,
             show_playlist: true,
             show_library: true,
+            show_waveform: false,
         }
     }
 }
@@ -117,5 +120,6 @@ mod tests {
         assert!(cfg.shuffle);
         assert_eq!(cfg.volume, 0.8);
         assert_eq!(cfg.repeat, Repeat::Off);
+        assert!(!cfg.show_waveform, "the waveform window starts off");
     }
 }

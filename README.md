@@ -22,6 +22,10 @@ New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.
   the Skins menu; write your own in TOML ([ADR-0008](docs/adr/0008-toml-skins.md)), or drop in a
   classic Winamp `.wsz` and get its windows drawn from its own bitmaps
   ([ADR-0010](docs/adr/0010-classic-wsz-renderer.md))
+- Waveform window (Windows → Waveform, off by default): the whole track as a DAW shows it,
+  with per-channel peak and RMS lanes, the played part highlighted, a playhead, and click or drag to
+  seek. It fills in left to right as the track is read
+  ([ADR-0017](docs/adr/0017-daw-style-waveform.md))
 - 10-band graphic equalizer (60 Hz – 16 kHz) with preamp, presets and a live response curve;
   double-click a slider to zero it ([ADR-0007](docs/adr/0007-biquad-equalizer-in-source-chain.md))
 - Search (**Ctrl+F**): finds tracks and folders anywhere under the current location by matching

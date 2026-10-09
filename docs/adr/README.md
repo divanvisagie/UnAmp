@@ -56,6 +56,7 @@ mechanics of adding one.
 | [0014](0014-lazy-folder-tree.md) | Show folders as a lazily loaded tree rooted at the current location | Proposed |
 | [0015](0015-search-by-walking.md) | Search the current location by walking its folders, without an index | Proposed |
 | [0016](0016-mpris-media-controls.md) | Expose playback over MPRIS with zbus, optional at runtime | Accepted |
+| [0017](0017-daw-style-waveform.md) | Draw a DAW-style whole-track waveform by decoding the track a second time | Proposed |
 
 ## Decision Relationship
 
@@ -82,6 +83,8 @@ flowchart TD
     N --> O
     A --> P[0016: MPRIS media controls]
     D --> P
+    F --> Q[0017: DAW-style waveform]
+    D --> Q
 ```
 
 ## Revisit Triggers
@@ -102,4 +105,6 @@ flowchart TD
   (load/save list) or resume-at-position — see [ADR-0013](0013-save-session-as-m3u.md).
 - Clients need to browse the queue/playlist over D-Bus, or Raise doesn't focus on Wayland in
   practice — see [ADR-0016](0016-mpris-media-controls.md).
+- Waveforms over a slow share lag or load the network noticeably, or recomputing after restarts
+  matters — see [ADR-0017](0017-daw-style-waveform.md) (disk cache, zoom).
 - A third app wants mount discovery, or the two copies diverge — extract a crate ([ADR-0005](0005-reuse-photograph-mount-discovery.md)).

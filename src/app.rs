@@ -12,6 +12,7 @@ use crate::session;
 use crate::classic::{self, ClassicSkin};
 use crate::skin::{self, Palette, Skin};
 use crate::visualizer::Visualizer;
+use crate::waveform::{self, WaveColors, Waveforms};
 
 const SIDEBAR_WIDTH: f32 = 200.0;
 const ART_SIZE: f32 = 132.0;
@@ -41,6 +42,7 @@ pub struct UnAmpApp {
     session_error: Option<String>,
     engine: Engine,
     visualizer: Visualizer,
+    waveforms: Waveforms,
     eq: Arc<EqParams>,
     skins: Vec<Skin>,
     /// Problems loading skin files, shown in the Skins menu.
@@ -91,6 +93,7 @@ impl UnAmpApp {
             session_error: None,
             engine,
             visualizer,
+            waveforms: Waveforms::default(),
             eq,
             skins,
             skin_errors,
@@ -1126,6 +1129,60 @@ impl UnAmpApp {
         }
     }
 
+    /// The current track's waveform, decoded on demand while this window is open.
+    fn show_waveform(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let Some(path) = self.engine.current().filter(|_| self.engine.state() != PlayState::Stopped) else {
+            ui.centered_and_justified(|ui| ui.weak("Play something to see its waveform"));
+            return;
+        };
+        let wf = self.waveforms.get(path, ctx);
+        let wf = wf.lock().unwrap_or_else(|e| e.into_inner());
+        let total = self.engine.duration().map(|d| d.as_secs_f64()).unwrap_or(0.0);
+
+        ui.horizontal(|ui| {
+            let title = self.now_playing_title().unwrap_or_default();
+            ui.label(egui::RichText::new(title).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(err) = &wf.error {
+                    ui.colored_label(ui.visuals().error_fg_color, format!("Can't draw: {err}"));
+                } else if !wf.done {
+                    let pct = if total > 0.0 { (wf.decoded_secs() / total * 100.0).min(99.0) } else { 0.0 };
+                    ui.weak(format!("Reading track… {pct:.0}%"));
+                    ui.spinner();
+                }
+            });
+        });
+
+        let colors = self.wave_colors(ui.visuals());
+        let position = self.engine.position().as_secs_f64();
+        if let Some(target) = waveform::show(ui, &wf, total, position, &colors) {
+            drop(wf);
+            self.engine.seek(Duration::from_secs_f64(target));
+        }
+    }
+
+    /// Waveform colours: a classic skin's playlist colours (current track,
+    /// normal text, list background), else the skin's accent on its inset
+    /// background.
+    fn wave_colors(&self, visuals: &egui::Visuals) -> WaveColors {
+        match &self.classic {
+            Some(skin) => WaveColors {
+                background: skin.pl.normal_bg,
+                center: skin.pl.normal.gamma_multiply(0.25),
+                played: skin.pl.current,
+                unplayed: skin.pl.normal,
+                playhead: skin.pl.current,
+            },
+            None => WaveColors {
+                background: visuals.extreme_bg_color,
+                center: visuals.weak_text_color().gamma_multiply(0.4),
+                played: visuals.selection.bg_fill,
+                unplayed: visuals.weak_text_color(),
+                playhead: visuals.strong_text_color(),
+            },
+        }
+    }
+
     /// Rescans built-in and user skins and re-applies the current one.
     fn reload_skins(&mut self, ctx: &egui::Context) {
         let (skins, errors) = skin::load_all();
@@ -1344,6 +1401,7 @@ impl eframe::App for UnAmpApp {
                         ui.checkbox(&mut self.config.show_equalizer, "Equalizer");
                         ui.checkbox(&mut self.config.show_playlist, "Playlist");
                         ui.checkbox(&mut self.config.show_library, "Media Library");
+                        ui.checkbox(&mut self.config.show_waveform, "Waveform");
                         ui.separator();
                         if ui.button("Reset layout").clicked() {
                             ctx.memory_mut(|m| m.reset_areas());
@@ -1448,6 +1506,19 @@ impl eframe::App for UnAmpApp {
                 .show(ctx, |ui| self.show_playlist_view(ui, ctx));
             self.config.show_playlist = open;
         }
+
+        // Off by default; Reset layout leaves it as it is.
+        let mut open = self.config.show_waveform;
+        egui::Window::new("Waveform")
+            .id(egui::Id::new("waveform_window"))
+            .open(&mut open)
+            .resizable(true)
+            .default_pos([left + STACK_WIDTH + 40.0, top + 590.0])
+            .default_size([620.0, 170.0])
+            .min_size([240.0, 110.0])
+            .constrain_to(desktop)
+            .show(ctx, |ui| self.show_waveform(ui, ctx));
+        self.config.show_waveform = open;
 
         let mut open = self.config.show_library;
         egui::Window::new("Media Library")

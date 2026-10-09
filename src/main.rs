@@ -13,6 +13,7 @@ mod session;
 mod skin;
 mod tree;
 mod visualizer;
+mod waveform;
 mod wsz;
 
 use app::UnAmpApp;
