@@ -52,6 +52,7 @@ mechanics of adding one.
 | [0010](0010-classic-wsz-renderer.md) | Render classic `.wsz` skins pixel-for-pixel in fixed-size windows | Accepted |
 | [0011](0011-built-in-skins-compiled-in-copy-out.md) | Keep built-in skins compiled in, with a non-overwriting "copy to folder" for editing | Accepted |
 | [0012](0012-up-next-queue.md) | Add an "up next" queue that plays before the playlist continues | Proposed |
+| [0013](0013-save-session-as-m3u.md) | Save the playlist and queue as extended M3U files, after every change | Proposed |
 
 ## Decision Relationship
 
@@ -70,6 +71,8 @@ flowchart TD
     F --> J
     H --> K[0011: Built-in skins compiled in, copy out]
     C --> L[0012: Up-next queue]
+    L --> M[0013: Save playlist and queue as M3U]
+    D --> M
 ```
 
 ## Revisit Triggers
@@ -84,6 +87,7 @@ flowchart TD
   not-implemented list in [ADR-0010](0010-classic-wsz-renderer.md).
 - Built-in skins start changing often enough that stale user copies cause confusion — see
   [ADR-0011](0011-built-in-skins-compiled-in-copy-out.md).
-- Queue or playlist needs to survive restarts, or the classic playlist needs to show the queue —
-  see [ADR-0012](0012-up-next-queue.md).
+- The classic playlist needs to show the queue — see [ADR-0012](0012-up-next-queue.md).
+- Very large playlists make save-on-every-change noticeable, or users want named playlists
+  (load/save list) or resume-at-position — see [ADR-0013](0013-save-session-as-m3u.md).
 - A third app wants mount discovery, or the two copies diverge — extract a crate ([ADR-0005](0005-reuse-photograph-mount-discovery.md)).

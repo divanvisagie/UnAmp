@@ -9,7 +9,7 @@ use crate::metadata::{self, TrackInfo};
 
 pub const ROW_HEIGHT: f32 = 22.0;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Track {
     pub path: PathBuf,
     pub name: String,

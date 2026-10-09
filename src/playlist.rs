@@ -15,25 +15,77 @@ enum Played {
     Queued(Track),
 }
 
+/// Everything needed to restore the playlist and queue after a restart.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Session {
+    pub tracks: Vec<Track>,
+    pub current: Option<usize>,
+    pub queue: Vec<Track>,
+    /// A queued track that was playing (it's no longer in `queue`).
+    pub playing_queued: Option<Track>,
+}
+
+/// Fields are private so every change goes through a method that bumps
+/// `revision`, which is how the app knows to save.
 #[derive(Default)]
 pub struct Playlist {
-    pub tracks: Vec<Track>,
+    tracks: Vec<Track>,
     /// Position in `tracks`: the playlist track playing, or, while a queued
     /// track plays, the one the playlist resumes after.
-    pub current: Option<usize>,
+    current: Option<usize>,
     /// Up next. Plays front to back before the playlist continues.
-    pub queue: VecDeque<Track>,
+    queue: VecDeque<Track>,
     /// The queued track that's playing, if the queue is what's playing.
     playing_queued: Option<Track>,
     /// Everything played so far, so Previous retraces shuffle and the queue.
     history: Vec<Played>,
     rng: Rng,
+    revision: u64,
 }
 
 impl Playlist {
+    /// Rebuilds a playlist from a saved session. History starts empty.
+    pub fn restore(session: Session) -> Self {
+        let current = session.current.filter(|&c| c < session.tracks.len());
+        Self {
+            tracks: session.tracks,
+            current,
+            queue: session.queue.into(),
+            playing_queued: session.playing_queued,
+            ..Default::default()
+        }
+    }
+
+    pub fn session(&self) -> Session {
+        Session {
+            tracks: self.tracks.clone(),
+            current: self.current,
+            queue: self.queue.iter().cloned().collect(),
+            playing_queued: self.playing_queued.clone(),
+        }
+    }
+
+    /// Changes whenever the playlist, queue or position may have changed.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn tracks(&self) -> &[Track] {
+        &self.tracks
+    }
+
+    pub fn queue(&self) -> &VecDeque<Track> {
+        &self.queue
+    }
+
     /// Starts a new playlist at `start`. The queue is kept: it's the
     /// listener's "up next", independent of what they're playing through.
     pub fn replace(&mut self, tracks: Vec<Track>, start: usize) {
+        self.touch();
         self.tracks = tracks;
         self.history.clear();
         self.playing_queued = None;
@@ -42,17 +94,20 @@ impl Playlist {
 
     /// Appends to the end of the playlist.
     pub fn append(&mut self, tracks: impl IntoIterator<Item = Track>) {
+        self.touch();
         self.tracks.extend(tracks);
     }
 
     /// Empties the playlist. The queue, and a queued track that's playing, stay.
     pub fn clear(&mut self) {
+        self.touch();
         self.tracks.clear();
         self.history.retain(|p| matches!(p, Played::Queued(_)));
         self.current = None;
     }
 
     pub fn remove(&mut self, index: usize) {
+        self.touch();
         if index >= self.tracks.len() {
             return;
         }
@@ -89,19 +144,31 @@ impl Playlist {
 
     /// Puts `track` at the front of the queue.
     pub fn play_next(&mut self, track: Track) {
+        self.touch();
         self.queue.push_front(track);
     }
 
     /// Puts tracks at the back of the queue.
     pub fn add_to_queue(&mut self, tracks: impl IntoIterator<Item = Track>) {
+        self.touch();
         self.queue.extend(tracks);
     }
 
     pub fn remove_from_queue(&mut self, index: usize) {
+        self.touch();
         self.queue.remove(index);
     }
 
+    /// Moves queue entry `index` to the front of the queue.
+    pub fn move_to_front(&mut self, index: usize) {
+        self.touch();
+        if let Some(track) = self.queue.remove(index) {
+            self.queue.push_front(track);
+        }
+    }
+
     pub fn clear_queue(&mut self) {
+        self.touch();
         self.queue.clear();
     }
 
@@ -121,6 +188,7 @@ impl Playlist {
 
     /// Plays playlist entry `index` now.
     pub fn jump(&mut self, index: usize) -> Option<&Track> {
+        self.touch();
         if index >= self.tracks.len() {
             return None;
         }
@@ -132,6 +200,7 @@ impl Playlist {
 
     /// Takes queue entry `index` out of the queue and plays it now.
     pub fn play_from_queue(&mut self, index: usize) -> Option<&Track> {
+        self.touch();
         let track = self.queue.remove(index)?;
         self.remember_now_playing(None);
         self.playing_queued = Some(track);
@@ -142,6 +211,7 @@ impl Playlist {
     /// playlist per shuffle/repeat. `auto` is true when the current track
     /// ended by itself (Repeat One only applies then, to whatever played).
     pub fn advance(&mut self, shuffle: bool, repeat: Repeat, auto: bool) -> Option<&Track> {
+        self.touch();
         if auto && repeat == Repeat::One && self.now_playing().is_some() {
             return self.now_playing();
         }
@@ -180,6 +250,7 @@ impl Playlist {
     /// else the playlist entry above. Going back to a queued track doesn't
     /// put it back in the queue.
     pub fn back(&mut self) -> Option<&Track> {
+        self.touch();
         loop {
             match self.history.pop() {
                 Some(Played::Index(p)) if p < self.tracks.len() => {
@@ -376,6 +447,33 @@ mod tests {
         assert_eq!(p.queue_position(&p.tracks[2].path), Some(1));
         assert_eq!(p.queue_position(&p.tracks[0].path), Some(2));
         assert_eq!(p.queue_position(&p.tracks[1].path), None);
+    }
+
+    #[test]
+    fn session_round_trips_and_every_change_bumps_revision() {
+        let mut p = playlist(3);
+        let r0 = p.revision();
+        p.add_to_queue([track("q1"), track("q2")]);
+        assert_ne!(p.revision(), r0);
+        p.advance(false, Repeat::Off, true); // q1 playing
+        let r1 = p.revision();
+        p.move_to_front(1);
+        assert_ne!(p.revision(), r1);
+
+        let restored = Playlist::restore(p.session());
+        assert_eq!(restored.session(), p.session());
+        assert_eq!(playing(&restored), "q1");
+        assert_eq!(restored.queue().len(), 1);
+    }
+
+    #[test]
+    fn restore_drops_an_out_of_range_current() {
+        let p = Playlist::restore(Session {
+            tracks: vec![track("a")],
+            current: Some(5),
+            ..Default::default()
+        });
+        assert_eq!(p.current, None);
     }
 
     #[test]

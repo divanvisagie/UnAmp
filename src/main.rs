@@ -7,6 +7,7 @@ mod locations;
 mod metadata;
 mod player;
 mod playlist;
+mod session;
 mod skin;
 mod visualizer;
 mod wsz;

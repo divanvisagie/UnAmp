@@ -7,6 +7,7 @@ use crate::library::{self, Library, Track, TrackAction};
 use crate::metadata::{self, TrackInfo};
 use crate::player::{Engine, PlayState};
 use crate::playlist::Playlist;
+use crate::session;
 use crate::classic::{self, ClassicSkin};
 use crate::skin::{self, Palette, Skin};
 use crate::visualizer::Visualizer;
@@ -29,6 +30,10 @@ pub struct UnAmpApp {
     config: AppConfig,
     library: Library,
     playlist: Playlist,
+    /// Playlist revision last written to disk.
+    saved_revision: u64,
+    /// Why the last save of the playlist/queue failed, shown in the status bar.
+    session_error: Option<String>,
     engine: Engine,
     visualizer: Visualizer,
     eq: Arc<EqParams>,
@@ -53,6 +58,10 @@ pub struct UnAmpApp {
 impl UnAmpApp {
     pub fn new(cc: &eframe::CreationContext<'_>, config: AppConfig) -> Self {
         let library = Library::new(config.browse_path.clone(), &cc.egui_ctx);
+        let playlist = session::dir()
+            .map(|dir| Playlist::restore(session::load(&dir)))
+            .unwrap_or_default();
+        let saved_revision = playlist.revision();
         let eq = EqParams::new(config.eq_enabled, config.eq_preamp, config.eq_bands);
         let engine = Engine::new(config.volume, Arc::clone(&eq));
         let visualizer = Visualizer::new(engine.tap());
@@ -68,7 +77,9 @@ impl UnAmpApp {
         Self {
             config,
             library,
-            playlist: Playlist::default(),
+            playlist,
+            saved_revision,
+            session_error: None,
             engine,
             visualizer,
             eq,
@@ -158,7 +169,7 @@ impl UnAmpApp {
             PlayState::Stopped => {
                 if let Some(track) = self.playlist.now_playing().cloned() {
                     self.start_track(track, ctx);
-                } else if !self.playlist.tracks.is_empty() || !self.playlist.queue.is_empty() {
+                } else if !self.playlist.tracks().is_empty() || !self.playlist.queue().is_empty() {
                     self.next(false, ctx);
                 } else if !self.library.tracks.is_empty() {
                     self.play_from_folder(0, ctx);
@@ -545,7 +556,7 @@ impl UnAmpApp {
     }
 
     fn show_playlist_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        if !self.playlist.queue.is_empty() {
+        if !self.playlist.queue().is_empty() {
             self.show_up_next(ui, ctx);
             ui.add_space(6.0);
         }
@@ -554,16 +565,16 @@ impl UnAmpApp {
             ui.label(egui::RichText::new("Playlist").strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(!self.playlist.tracks.is_empty(), egui::Button::new("Clear"))
+                    .add_enabled(!self.playlist.tracks().is_empty(), egui::Button::new("Clear"))
                     .clicked()
                 {
                     self.playlist.clear();
                 }
-                let total: Duration = self.playlist.tracks.iter().filter_map(|t| t.duration()).sum();
+                let total: Duration = self.playlist.tracks().iter().filter_map(|t| t.duration()).sum();
                 ui.label(
                     egui::RichText::new(format!(
                         "{} tracks, {}",
-                        self.playlist.tracks.len(),
+                        self.playlist.tracks().len(),
                         metadata::format_duration(total)
                     ))
                     .weak(),
@@ -572,7 +583,7 @@ impl UnAmpApp {
         });
         ui.separator();
 
-        if self.playlist.tracks.is_empty() {
+        if self.playlist.tracks().is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label("Playlist is empty — double-click a track in the Media Library");
             });
@@ -585,9 +596,9 @@ impl UnAmpApp {
         egui::ScrollArea::vertical()
             .id_salt("playlist_rows")
             .auto_shrink([false, false])
-            .show_rows(ui, library::ROW_HEIGHT, self.playlist.tracks.len(), |ui, range| {
+            .show_rows(ui, library::ROW_HEIGHT, self.playlist.tracks().len(), |ui, range| {
                 for index in range {
-                    let track = &self.playlist.tracks[index];
+                    let track = &self.playlist.tracks()[index];
                     let title = with_queue_marker(self.playlist.queue_position(&track.path), track.title());
                     let resp = library::track_row(
                         ui,
@@ -624,7 +635,7 @@ impl UnAmpApp {
     /// The up-next queue, above the playlist while it has anything in it.
     fn show_up_next(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!("Up next ({})", self.playlist.queue.len())).strong());
+            ui.label(egui::RichText::new(format!("Up next ({})", self.playlist.queue().len())).strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Clear queue").clicked() {
                     self.playlist.clear_queue();
@@ -639,14 +650,14 @@ impl UnAmpApp {
             Remove(usize),
         }
         let mut action = None;
-        let rows = self.playlist.queue.len();
+        let rows = self.playlist.queue().len();
         egui::ScrollArea::vertical()
             .id_salt("up_next_rows")
             .max_height(library::ROW_HEIGHT * 5.0)
             .auto_shrink([false, true])
             .show_rows(ui, library::ROW_HEIGHT, rows, |ui, range| {
                 for index in range {
-                    let track = &self.playlist.queue[index];
+                    let track = &self.playlist.queue()[index];
                     let resp = library::track_row(ui, index, &track.title(), track.duration(), false, false);
                     if resp.double_clicked() {
                         action = Some(QueueAction::PlayNow(index));
@@ -671,11 +682,7 @@ impl UnAmpApp {
                     self.start_track(track, ctx);
                 }
             }
-            Some(QueueAction::MoveToFront(index)) => {
-                if let Some(track) = self.playlist.queue.remove(index) {
-                    self.playlist.play_next(track);
-                }
-            }
+            Some(QueueAction::MoveToFront(index)) => self.playlist.move_to_front(index),
             Some(QueueAction::Remove(index)) => self.playlist.remove_from_queue(index),
             None => {}
         }
@@ -690,12 +697,12 @@ impl UnAmpApp {
                 }
             }
             PlaylistAction::PlayNext(index) => {
-                if let Some(track) = self.playlist.tracks.get(index).cloned() {
+                if let Some(track) = self.playlist.tracks().get(index).cloned() {
                     self.playlist.play_next(track);
                 }
             }
             PlaylistAction::AddToQueue(index) => {
-                if let Some(track) = self.playlist.tracks.get(index).cloned() {
+                if let Some(track) = self.playlist.tracks().get(index).cloned() {
                     self.playlist.add_to_queue([track]);
                 }
             }
@@ -739,7 +746,7 @@ impl UnAmpApp {
         let (bars, peaks) = self.visualizer.levels();
         let queued: Vec<Option<usize>> = self
             .playlist
-            .tracks
+            .tracks()
             .iter()
             .map(|t| self.playlist.queue_position(&t.path))
             .collect();
@@ -760,10 +767,10 @@ impl UnAmpApp {
             eq: self.eq.snapshot(),
             bars,
             peaks,
-            tracks: &self.playlist.tracks,
+            tracks: &self.playlist.tracks(),
             current: self.playlist.playing_index(),
             queued: &queued,
-            total: self.playlist.tracks.iter().filter_map(|t| t.duration()).sum(),
+            total: self.playlist.tracks().iter().filter_map(|t| t.duration()).sum(),
             time: ctx.input(|i| i.time),
         };
 
@@ -899,6 +906,23 @@ impl UnAmpApp {
             for err in &self.skin_errors {
                 ui.colored_label(ui.visuals().error_fg_color, err);
             }
+        }
+    }
+
+    /// Writes the playlist and queue to disk if they changed since the last save.
+    fn save_session(&mut self) {
+        if self.playlist.revision() == self.saved_revision {
+            return;
+        }
+        let Some(dir) = session::dir() else {
+            return;
+        };
+        match session::save(&dir, &self.playlist.session()) {
+            Ok(()) => {
+                self.saved_revision = self.playlist.revision();
+                self.session_error = None;
+            }
+            Err(e) => self.session_error = Some(format!("Couldn't save playlist: {e}")),
         }
     }
 
@@ -1122,7 +1146,7 @@ impl eframe::App for UnAmpApp {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if let Some(err) = &self.engine.error {
+                    if let Some(err) = self.engine.error.as_ref().or(self.session_error.as_ref()) {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     } else if self.engine.state() == PlayState::Loading {
                         ui.spinner();
@@ -1206,9 +1230,18 @@ impl eframe::App for UnAmpApp {
             .constrain_to(desktop)
             .show(ctx, |ui| self.show_library(ui, ctx));
         self.config.show_library = open;
+
+        // After the frame's changes, so a click is saved the frame it happens.
+        // Failures are retried next change, not every frame.
+        let before = self.playlist.revision();
+        self.save_session();
+        if self.session_error.is_some() {
+            self.saved_revision = before;
+        }
     }
 
     fn on_exit(&mut self) {
+        self.save_session();
         self.config.browse_path = Some(self.library.current_dir.clone());
         self.config.save();
     }

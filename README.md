@@ -34,12 +34,14 @@ New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.
   before the playlist carries on from where it was, show as `[1]`, `[2]` in the playlist (classic
   skins too), and Previous walks back through everything you heard
   ([ADR-0012](docs/adr/0012-up-next-queue.md))
+- The playlist and queue are saved as you go and restored on startup, as standard M3U files other
+  players can open ([ADR-0013](docs/adr/0013-save-session-as-m3u.md))
 - Shuffle, repeat (off / all / one), seek, volume
 - Spectrum analyzer with falling peak caps; elapsed/remaining time (click the time to toggle)
 - Network-safe: files are opened, probed and tag-read on worker threads, never on the UI thread
   ([ADR-0004](docs/adr/0004-file-io-off-ui-thread.md))
 
-Not yet: Opus, recursive folder play, saved playlists and queue (`.m3u`), custom EQ presets, MPRIS/media keys.
+Not yet: Opus, recursive folder play, named playlists (load/save list), resume-at-position, custom EQ presets, MPRIS/media keys.
 
 ## Keyboard
 
@@ -87,7 +89,9 @@ make install
 
 Settings are saved on exit to `~/.config/unamp/config.toml`: last folder, volume, shuffle,
 repeat, time display mode, equalizer settings, skin and which windows are open. Window positions and
-sizes are kept by eframe in `~/.local/share/unamp/`.
+sizes are kept by eframe in `~/.local/share/unamp/`, next to `playlist.m3u8` and `queue.m3u8`.
+Those are ordinary extended M3U playlists; UnAmp marks where you were with `#UNAMP-CURRENT` and
+`#UNAMP-PLAYING` comment lines, which other players ignore.
 
 ## Development
 

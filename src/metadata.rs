@@ -29,7 +29,7 @@ pub fn is_audio(path: &Path) -> bool {
         .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TrackInfo {
     pub title: Option<String>,
     pub artist: Option<String>,
