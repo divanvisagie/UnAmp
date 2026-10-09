@@ -55,6 +55,7 @@ mechanics of adding one.
 | [0013](0013-save-session-as-m3u.md) | Save the playlist and queue as extended M3U files, after every change | Proposed |
 | [0014](0014-lazy-folder-tree.md) | Show folders as a lazily loaded tree rooted at the current location | Proposed |
 | [0015](0015-search-by-walking.md) | Search the current location by walking its folders, without an index | Proposed |
+| [0016](0016-mpris-media-controls.md) | Expose playback over MPRIS with zbus, optional at runtime | Accepted |
 
 ## Decision Relationship
 
@@ -79,6 +80,8 @@ flowchart TD
     D --> N
     C --> O[0015: Search by walking folders]
     N --> O
+    A --> P[0016: MPRIS media controls]
+    D --> P
 ```
 
 ## Revisit Triggers
@@ -97,4 +100,6 @@ flowchart TD
 - The classic playlist needs to show the queue — see [ADR-0012](0012-up-next-queue.md).
 - Very large playlists make save-on-every-change noticeable, or users want named playlists
   (load/save list) or resume-at-position — see [ADR-0013](0013-save-session-as-m3u.md).
+- Clients need to browse the queue/playlist over D-Bus, or Raise doesn't focus on Wayland in
+  practice — see [ADR-0016](0016-mpris-media-controls.md).
 - A third app wants mount discovery, or the two copies diverge — extract a crate ([ADR-0005](0005-reuse-photograph-mount-discovery.md)).

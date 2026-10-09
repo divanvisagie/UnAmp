@@ -36,7 +36,7 @@ NOTES_FLAG := $(if $(NOTES),--notes-file "$(NOTES)")
 
 .DEFAULT_GOAL := help
 
-.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean-deb clean-icons icons icon-runtime release release-check bump
+.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean-deb clean-icons icons icon-runtime release release-check bump install-desktop uninstall-desktop
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -107,6 +107,25 @@ build-deb: ## Build the .deb into target/deb/
 
 install-linux: build-deb
 	sudo apt install --reinstall -y "./$(DEB_PATH)"
+
+# For running from source: registers UnAmp's launcher and icon in your home
+# directory, so GNOME (dock, media controls) shows its name and icon. The
+# launcher runs this checkout's release build.
+USER_APPS := $(HOME)/.local/share/applications
+USER_ICONS := $(HOME)/.local/share/icons/hicolor/scalable/apps
+
+install-desktop: ## Register a launcher + icon for this checkout's build in ~/.local/share
+	cargo build --release --bin $(APP_NAME)
+	mkdir -p "$(USER_APPS)" "$(USER_ICONS)"
+	sed 's#^Exec=.*#Exec=$(CURDIR)/target/release/$(APP_NAME)#' "$(LINUX_DESKTOP_SRC)" > "$(USER_APPS)/$(APP_NAME).desktop"
+	install -m 644 "$(LINUX_ICON_SRC)" "$(USER_ICONS)/$(APP_NAME).svg"
+	-update-desktop-database "$(USER_APPS)" >/dev/null 2>&1
+	-gtk-update-icon-cache -q -t "$(HOME)/.local/share/icons/hicolor" >/dev/null 2>&1
+	@echo "Installed $(USER_APPS)/$(APP_NAME).desktop (runs $(CURDIR)/target/release/$(APP_NAME))"
+
+uninstall-desktop: ## Remove what install-desktop added
+	rm -f "$(USER_APPS)/$(APP_NAME).desktop" "$(USER_ICONS)/$(APP_NAME).svg"
+	-update-desktop-database "$(USER_APPS)" >/dev/null 2>&1
 
 clean-deb: ## Remove built .deb artifacts
 	rm -rf "$(DEB_DIR)"

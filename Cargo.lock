@@ -3929,6 +3929,7 @@ dependencies = [
  "rustfft",
  "serde",
  "toml",
+ "zbus",
  "zip",
 ]
 

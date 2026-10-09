@@ -82,15 +82,18 @@ pub fn read_track_info(path: &Path) -> TrackInfo {
     info
 }
 
-/// Album art for a track: the embedded front cover (or any embedded
-/// picture), else a cover image in the track's folder. Returned as RGBA,
-/// downscaled to `ART_MAX_EDGE`.
-pub fn load_album_art(path: &Path) -> Option<image::RgbaImage> {
-    let bytes = embedded_art(path).or_else(|| {
+/// The encoded album-art image for a track: the embedded front cover (or
+/// any embedded picture), else a cover image in the track's folder.
+pub fn album_art_bytes(path: &Path) -> Option<Vec<u8>> {
+    embedded_art(path).or_else(|| {
         let file = folder_art(path.parent()?)?;
         std::fs::read(file).ok()
-    })?;
-    let img = image::load_from_memory(&bytes).ok()?;
+    })
+}
+
+/// Decodes album art and downscales it to `ART_MAX_EDGE`.
+pub fn decode_art(bytes: &[u8]) -> Option<image::RgbaImage> {
+    let img = image::load_from_memory(bytes).ok()?;
     let img = if img.width() > ART_MAX_EDGE || img.height() > ART_MAX_EDGE {
         img.thumbnail(ART_MAX_EDGE, ART_MAX_EDGE)
     } else {
@@ -148,6 +151,51 @@ fn pick_cover(names: &[(PathBuf, String)]) -> Option<PathBuf> {
         .map(|(path, _)| path.clone())
 }
 
+/// Most art files kept in the cache; the oldest go first beyond this.
+const ART_CACHE_MAX: usize = 256;
+
+/// Writes album art to `~/.cache/unamp/art/`, named by a hash of its
+/// content so the same cover is stored once, and returns the file. Media
+/// controls (MPRIS) need art as a local file they can open: embedded art
+/// has no file of its own, and a cover on a network share may not be
+/// readable by the desktop shell.
+pub fn cache_art(bytes: &[u8]) -> Option<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let dir = dirs::cache_dir()?.join("unamp").join("art");
+    std::fs::create_dir_all(&dir).ok()?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    let ext = image::guess_format(bytes)
+        .ok()
+        .and_then(|f| f.extensions_str().first().copied())
+        .unwrap_or("img");
+    let path = dir.join(format!("{:016x}.{ext}", hasher.finish()));
+    if !path.exists() {
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, bytes).ok()?;
+        std::fs::rename(&tmp, &path).ok()?;
+        prune_cache(&dir, ART_CACHE_MAX);
+    }
+    Some(path)
+}
+
+fn prune_cache(dir: &Path, max: usize) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .collect();
+    if files.len() <= max {
+        return;
+    }
+    files.sort();
+    for (_, path) in files.iter().take(files.len() - max) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 pub fn format_duration(d: Duration) -> String {
     let secs = d.as_secs();
     if secs >= 3600 {
@@ -194,6 +242,24 @@ mod tests {
     #[test]
     fn pick_cover_ignores_non_images() {
         assert_eq!(pick_cover(&names(&["cover.txt", "01.mp3"])), None);
+    }
+
+    #[test]
+    fn prune_cache_keeps_the_newest() {
+        let dir = std::env::temp_dir().join(format!("unamp-artcache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..5 {
+            let p = dir.join(format!("{i}.jpg"));
+            std::fs::write(&p, b"x").unwrap();
+            let t = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000 + i);
+            std::fs::File::options().write(true).open(&p).unwrap().set_modified(t).unwrap();
+        }
+        prune_cache(&dir, 2);
+        let mut left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().into_string().unwrap()).collect();
+        left.sort();
+        assert_eq!(left, ["3.jpg", "4.jpg"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

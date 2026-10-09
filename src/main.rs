@@ -5,6 +5,7 @@ mod eq;
 mod library;
 mod locations;
 mod metadata;
+mod mpris;
 mod player;
 mod playlist;
 mod search;

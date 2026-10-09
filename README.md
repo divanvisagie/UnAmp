@@ -38,6 +38,9 @@ New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.
   before the playlist carries on from where it was, show as `[1]`, `[2]` in the playlist (classic
   skins too), and Previous walks back through everything you heard
   ([ADR-0012](docs/adr/0012-up-next-queue.md))
+- Media controls (MPRIS): shows up in GNOME's notification-panel mini player with art and
+  controls, and works with media keys, headset buttons and `playerctl`. Optional: without a
+  D-Bus session it's simply off ([ADR-0016](docs/adr/0016-mpris-media-controls.md))
 - The playlist and queue are saved as you go and restored on startup, as standard M3U files other
   players can open ([ADR-0013](docs/adr/0013-save-session-as-m3u.md))
 - Shuffle, repeat (off / all / one), seek, volume
@@ -45,7 +48,7 @@ New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.
 - Network-safe: files are opened, probed and tag-read on worker threads, never on the UI thread
   ([ADR-0004](docs/adr/0004-file-io-off-ui-thread.md))
 
-Not yet: Opus, recursive folder play, named playlists (load/save list), resume-at-position, custom EQ presets, MPRIS/media keys.
+Not yet: Opus, recursive folder play, named playlists (load/save list), resume-at-position, custom EQ presets.
 
 ## Keyboard
 
@@ -82,6 +85,10 @@ doesn't draw, is in [docs/skinning.md](docs/skinning.md).
 sudo apt install -y libasound2-dev pkg-config
 cargo run --release
 ```
+
+Running from source? `make install-desktop` registers a launcher and icon for your checkout in
+`~/.local/share` (undo with `make uninstall-desktop`), so GNOME's dock and media controls show
+UnAmp's name and icon.
 
 ### Linux (.deb)
 

@@ -6,6 +6,7 @@ use crate::eq::{self, EqParams, EqSnapshot};
 use crate::library::{self, Library, Track, TrackAction};
 use crate::metadata::{self, TrackInfo};
 use crate::player::{Engine, PlayState};
+use crate::mpris::{self, Mpris};
 use crate::playlist::Playlist;
 use crate::session;
 use crate::classic::{self, ClassicSkin};
@@ -26,6 +27,8 @@ struct NowPlayingResult {
     generation: u64,
     info: TrackInfo,
     art: Option<image::RgbaImage>,
+    /// `file://` URL of the art in UnAmp's cache, for media controls.
+    art_url: Option<String>,
 }
 
 pub struct UnAmpApp {
@@ -49,6 +52,10 @@ pub struct UnAmpApp {
     classic: Option<ClassicSkin>,
     now_info: Option<TrackInfo>,
     art: Option<egui::TextureHandle>,
+    art_url: Option<String>,
+    /// Bumped per started track; MPRIS identifies tracks by it.
+    track_serial: u64,
+    mpris: Mpris,
     art_generation: u64,
     art_tx: mpsc::Sender<NowPlayingResult>,
     art_rx: mpsc::Receiver<NowPlayingResult>,
@@ -92,6 +99,9 @@ impl UnAmpApp {
             classic,
             now_info: None,
             art: None,
+            art_url: None,
+            track_serial: 0,
+            mpris: Mpris::start(&cc.egui_ctx),
             art_generation: 0,
             art_tx,
             art_rx,
@@ -103,6 +113,9 @@ impl UnAmpApp {
     fn start_track(&mut self, track: Track, ctx: &egui::Context) {
         self.engine.play(track.path.clone(), track.duration(), ctx);
         self.now_info = track.info.clone();
+        self.track_serial += 1;
+        self.art = None;
+        self.art_url = None;
 
         // The playlist's copy of the tags may predate the folder's tag
         // reader finishing, so always read them fresh alongside the cover.
@@ -112,18 +125,25 @@ impl UnAmpApp {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let info = metadata::read_track_info(&track.path);
-            let art = metadata::load_album_art(&track.path);
-            let _ = tx.send(NowPlayingResult { generation, info, art });
+            let bytes = metadata::album_art_bytes(&track.path);
+            let art = bytes.as_deref().and_then(metadata::decode_art);
+            let art_url = bytes
+                .as_deref()
+                .filter(|_| art.is_some())
+                .and_then(metadata::cache_art)
+                .map(|p| mpris::file_url(&p));
+            let _ = tx.send(NowPlayingResult { generation, info, art, art_url });
             ctx.request_repaint();
         });
     }
 
     fn poll_now_playing(&mut self, ctx: &egui::Context) {
-        while let Ok(NowPlayingResult { generation, info, art }) = self.art_rx.try_recv() {
+        while let Ok(NowPlayingResult { generation, info, art, art_url }) = self.art_rx.try_recv() {
             if generation != self.art_generation {
                 continue;
             }
             self.now_info = Some(info);
+            self.art_url = art_url;
             self.art = art.map(|img| {
                 let size = [img.width() as usize, img.height() as usize];
                 let color = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
@@ -1005,20 +1025,104 @@ impl UnAmpApp {
         }
     }
 
-    /// Writes the playlist and queue to disk if they changed since the last save.
+    /// Writes the playlist and queue to disk if they changed since the last
+    /// save. A failure is reported and retried on the next change, not
+    /// every frame.
     fn save_session(&mut self) {
         if self.playlist.revision() == self.saved_revision {
             return;
         }
+        self.saved_revision = self.playlist.revision();
         let Some(dir) = session::dir() else {
             return;
         };
-        match session::save(&dir, &self.playlist.session()) {
-            Ok(()) => {
-                self.saved_revision = self.playlist.revision();
-                self.session_error = None;
+        self.session_error = session::save(&dir, &self.playlist.session())
+            .err()
+            .map(|e| format!("Couldn't save playlist: {e}"));
+    }
+
+    /// What media controls should show right now, and the position in µs.
+    fn mpris_state(&self) -> (mpris::State, i64) {
+        let state = self.engine.state();
+        let current = self.engine.current().filter(|_| state != PlayState::Stopped);
+        let info = self.now_info.as_ref();
+        let has_lists = !self.playlist.tracks().is_empty() || !self.playlist.queue().is_empty();
+        let status = match state {
+            PlayState::Playing => mpris::Status::Playing,
+            PlayState::Paused => mpris::Status::Paused,
+            // Loading is the gap between tracks; reporting it as playing
+            // stops the panel flickering to stopped on every track change.
+            PlayState::Loading => mpris::Status::Playing,
+            PlayState::Stopped => mpris::Status::Stopped,
+        };
+        let mpris_state = mpris::State {
+            status,
+            track_id: current.map(|_| format!("/org/unamp/track/{}", self.track_serial)),
+            title: current.map(|p| info.and_then(|i| i.title.clone()).unwrap_or_else(|| metadata::file_stem(p))),
+            artist: info.and_then(|i| i.artist.clone()).filter(|_| current.is_some()),
+            album: info.and_then(|i| i.album.clone()).filter(|_| current.is_some()),
+            length_us: self.engine.duration().filter(|_| current.is_some()).map(|d| d.as_micros() as i64),
+            art_url: self.art_url.clone().filter(|_| current.is_some()),
+            volume: self.config.volume as f64,
+            shuffle: self.config.shuffle,
+            repeat: self.config.repeat,
+            can_go_next: has_lists,
+            can_go_previous: current.is_some(),
+            can_play: current.is_some() || has_lists || !self.library.visible_tracks().is_empty(),
+            can_seek: current.is_some() && self.engine.duration().is_some(),
+        };
+        (mpris_state, self.engine.position().as_micros() as i64)
+    }
+
+    /// Carries out a command from GNOME's media controls, media keys, etc.
+    fn apply_mpris(&mut self, command: mpris::Command, ctx: &egui::Context) {
+        use mpris::Command as C;
+        let state = self.engine.state();
+        match command {
+            C::PlayPause => match state {
+                PlayState::Playing | PlayState::Paused => self.engine.toggle_pause(),
+                PlayState::Stopped => self.play(ctx),
+                PlayState::Loading => {}
+            },
+            C::Play => match state {
+                PlayState::Paused => self.engine.toggle_pause(),
+                PlayState::Stopped => self.play(ctx),
+                _ => {}
+            },
+            C::Pause => {
+                if state == PlayState::Playing {
+                    self.engine.toggle_pause();
+                }
             }
-            Err(e) => self.session_error = Some(format!("Couldn't save playlist: {e}")),
+            C::Stop => self.engine.stop(),
+            C::Next => self.next(false, ctx),
+            C::Previous => self.previous(ctx),
+            C::Seek(offset_us) => {
+                let target = self.engine.position().as_micros() as i64 + offset_us;
+                match self.engine.duration() {
+                    // Seeking past the end moves to the next track, per the spec.
+                    Some(d) if target > d.as_micros() as i64 => self.next(false, ctx),
+                    _ => self.engine.seek(Duration::from_micros(target.max(0) as u64)),
+                }
+            }
+            C::SetPosition(track_id, position_us) => {
+                let current_id = format!("/org/unamp/track/{}", self.track_serial);
+                let in_range = self.engine.duration().is_some_and(|d| position_us <= d.as_micros() as i64);
+                if track_id == current_id && position_us >= 0 && in_range {
+                    self.engine.seek(Duration::from_micros(position_us as u64));
+                }
+            }
+            C::Raise => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            C::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            C::SetVolume(volume) => {
+                self.config.volume = volume as f32;
+                self.engine.set_volume(self.config.volume);
+            }
+            C::SetShuffle(on) => self.config.shuffle = on,
+            C::SetRepeat(repeat) => self.config.repeat = repeat,
         }
     }
 
@@ -1182,6 +1286,28 @@ fn version_label() -> String {
 }
 
 impl eframe::App for UnAmpApp {
+    /// Playback housekeeping. eframe calls this before every frame and also
+    /// while the window is hidden (as long as a repaint is requested), so
+    /// tracks keep advancing and media controls keep working when UnAmp is
+    /// minimised or on another workspace.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.engine.poll();
+        self.poll_now_playing(ctx);
+        if self.engine.take_finished() {
+            self.next(true, ctx);
+        }
+        for command in self.mpris.commands() {
+            self.apply_mpris(command, ctx);
+        }
+        let (state, position) = self.mpris_state();
+        self.mpris.update(state, position);
+        self.save_session();
+        if self.engine.state() == PlayState::Playing {
+            // Keeps logic() running while hidden, to catch the end of a track.
+            ctx.request_repaint_after(Duration::from_millis(250));
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
@@ -1193,11 +1319,6 @@ impl eframe::App for UnAmpApp {
         self.config.window_height = Some(size.y);
 
         self.library.poll(ctx);
-        self.engine.poll();
-        self.poll_now_playing(ctx);
-        if self.engine.take_finished() {
-            self.next(true, ctx);
-        }
         self.handle_keys(ctx);
         self.update_window_title(ctx);
 
@@ -1340,13 +1461,6 @@ impl eframe::App for UnAmpApp {
             .show(ctx, |ui| self.show_library(ui, ctx));
         self.config.show_library = open;
 
-        // After the frame's changes, so a click is saved the frame it happens.
-        // Failures are retried next change, not every frame.
-        let before = self.playlist.revision();
-        self.save_session();
-        if self.session_error.is_some() {
-            self.saved_revision = before;
-        }
     }
 
     fn on_exit(&mut self) {
