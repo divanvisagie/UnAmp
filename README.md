@@ -28,14 +28,18 @@ New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.
 - Plays MP3, FLAC, Ogg Vorbis, WAV, AAC/ALAC (`.m4a`), AIFF, CAF and MKA via symphonia
 - Reads tags (title, artist, album, track number, duration, bitrate) for the folder you're viewing
 - Album art from embedded covers, or `cover`/`folder`/`front`/`album` images beside the tracks
-- Playlist: double-click a track in the library to play its folder from there, or enqueue
-  tracks/folders (right-click)
+- Playlist: double-click a track in the library to play its folder from there, or right-click to
+  add tracks or whole folders to the playlist
+- Up-next queue: right-click any track for **Play next** or **Add to queue**. Queued tracks play
+  before the playlist carries on from where it was, show as `[1]`, `[2]` in the playlist (classic
+  skins too), and Previous walks back through everything you heard
+  ([ADR-0012](docs/adr/0012-up-next-queue.md))
 - Shuffle, repeat (off / all / one), seek, volume
 - Spectrum analyzer with falling peak caps; elapsed/remaining time (click the time to toggle)
 - Network-safe: files are opened, probed and tag-read on worker threads, never on the UI thread
   ([ADR-0004](docs/adr/0004-file-io-off-ui-thread.md))
 
-Not yet: Opus, recursive folder play, saved playlists (`.m3u`), custom EQ presets, MPRIS/media keys.
+Not yet: Opus, recursive folder play, saved playlists and queue (`.m3u`), custom EQ presets, MPRIS/media keys.
 
 ## Keyboard
 

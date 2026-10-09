@@ -51,6 +51,7 @@ mechanics of adding one.
 | [0009](0009-convert-winamp-wsz-colours.md) | Convert classic Winamp `.wsz` skins to TOML skins, colours only | Superseded by [ADR-0010](0010-classic-wsz-renderer.md) |
 | [0010](0010-classic-wsz-renderer.md) | Render classic `.wsz` skins pixel-for-pixel in fixed-size windows | Accepted |
 | [0011](0011-built-in-skins-compiled-in-copy-out.md) | Keep built-in skins compiled in, with a non-overwriting "copy to folder" for editing | Accepted |
+| [0012](0012-up-next-queue.md) | Add an "up next" queue that plays before the playlist continues | Proposed |
 
 ## Decision Relationship
 
@@ -68,6 +69,7 @@ flowchart TD
     I --> J[0010: Classic .wsz renderer]
     F --> J
     H --> K[0011: Built-in skins compiled in, copy out]
+    C --> L[0012: Up-next queue]
 ```
 
 ## Revisit Triggers
@@ -82,4 +84,6 @@ flowchart TD
   not-implemented list in [ADR-0010](0010-classic-wsz-renderer.md).
 - Built-in skins start changing often enough that stale user copies cause confusion — see
   [ADR-0011](0011-built-in-skins-compiled-in-copy-out.md).
+- Queue or playlist needs to survive restarts, or the classic playlist needs to show the queue —
+  see [ADR-0012](0012-up-next-queue.md).
 - A third app wants mount discovery, or the two copies diverge — extract a crate ([ADR-0005](0005-reuse-photograph-mount-discovery.md)).

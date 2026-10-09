@@ -6,6 +6,7 @@ use std::time::Duration;
 use egui::{Color32, Pos2, Rect, Sense, Vec2};
 
 use super::{Bmp, ClassicSkin, EQ_SIZE, MAIN_SIZE, PLAYLIST_SIZE, SCALE};
+use crate::app::PlaylistAction;
 use crate::config::Repeat;
 use crate::eq::{self, EqSnapshot};
 use crate::library::Track;
@@ -32,7 +33,10 @@ pub struct View<'a> {
     pub bars: &'a [f32; visualizer::BANDS],
     pub peaks: &'a [f32; visualizer::BANDS],
     pub tracks: &'a [Track],
+    /// The playlist entry that's playing (`None` while the queue plays).
     pub current: Option<usize>,
+    /// Each playlist entry's up-next queue position, for `[n]` markers.
+    pub queued: &'a [Option<usize>],
     /// Total playlist length, for the running-time display.
     pub total: Duration,
     pub time: f64,
@@ -58,7 +62,7 @@ pub enum Action {
     ClosePlaylist,
     Minimize,
     Eq(EqSnapshot),
-    PlayTrack(usize),
+    Playlist(crate::app::PlaylistAction),
 }
 
 /// Fills a rectangle given in skin pixels.
@@ -461,17 +465,34 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
     skin.playlist_scroll = skin.playlist_scroll.clamp(0.0, max_scroll);
     let first = skin.playlist_scroll.floor() as usize;
 
-    if list_resp.clicked() || list_resp.double_clicked() {
+    if list_resp.clicked() || list_resp.double_clicked() || list_resp.secondary_clicked() {
         if let Some(pt) = pointer_skin(ui, o) {
             let index = first + ((pt.y - list[1]) / row_h).floor() as usize;
             if index < v.tracks.len() {
                 skin.playlist_selected = Some(index);
                 if list_resp.double_clicked() {
-                    out.push(Action::PlayTrack(index));
+                    out.push(Action::Playlist(PlaylistAction::Play(index)));
                 }
             }
         }
     }
+    // Right-click acts on the row under the pointer (selected just above).
+    list_resp.context_menu(|ui| {
+        let Some(index) = skin.playlist_selected.filter(|&i| i < v.tracks.len()) else {
+            ui.close();
+            return;
+        };
+        for (label, action) in [
+            ("\u{25B6} Play", PlaylistAction::Play(index)),
+            (crate::library::PLAY_NEXT, PlaylistAction::PlayNext(index)),
+            (crate::library::ADD_TO_QUEUE, PlaylistAction::AddToQueue(index)),
+            ("\u{2796} Remove", PlaylistAction::Remove(index)),
+        ] {
+            if ui.button(label).clicked() {
+                out.push(Action::Playlist(action));
+            }
+        }
+    });
 
     // Scrollbar thumb in the right edge's track; drag it or use the wheel.
     let track = [w - 15.0, 20.0, 8.0, list[3]];
@@ -515,7 +536,10 @@ pub fn show_playlist(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &
         text_painter.text(
             Pos2::new(o.x + (list[0] + 2.0) * SCALE, y),
             egui::Align2::LEFT_CENTER,
-            format!("{}. {}", index + 1, track.title()),
+            match v.queued.get(index).copied().flatten() {
+                Some(n) => format!("{}. [{n}] {}", index + 1, track.title()),
+                None => format!("{}. {}", index + 1, track.title()),
+            },
             font.clone(),
             color,
         );

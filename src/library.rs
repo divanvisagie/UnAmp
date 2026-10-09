@@ -43,9 +43,17 @@ impl Track {
 pub enum TrackAction {
     /// Play this folder from the given track.
     Play(usize),
-    /// Append these tracks to the playlist.
-    Enqueue(Vec<usize>),
+    /// Put the track at the front of the up-next queue.
+    PlayNext(usize),
+    /// Put the track at the back of the up-next queue.
+    AddToQueue(usize),
+    /// Append the track to the playlist.
+    AddToPlaylist(usize),
 }
+
+/// Labels shared by every track context menu, so they read the same everywhere.
+pub const PLAY_NEXT: &str = "\u{23ED} Play next";
+pub const ADD_TO_QUEUE: &str = "\u{2795} Add to queue";
 
 struct InfoResult {
     generation: u64,
@@ -339,8 +347,14 @@ impl Library {
                         if ui.button("\u{25B6} Play").clicked() {
                             action = Some(TrackAction::Play(index));
                         }
-                        if ui.button("\u{2795} Enqueue").clicked() {
-                            action = Some(TrackAction::Enqueue(vec![index]));
+                        if ui.button(PLAY_NEXT).clicked() {
+                            action = Some(TrackAction::PlayNext(index));
+                        }
+                        if ui.button(ADD_TO_QUEUE).clicked() {
+                            action = Some(TrackAction::AddToQueue(index));
+                        }
+                        if ui.button("\u{1F3B6} Add to playlist").clicked() {
+                            action = Some(TrackAction::AddToPlaylist(index));
                         }
                     });
                 }

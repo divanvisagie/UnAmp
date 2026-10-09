@@ -121,7 +121,7 @@ impl UnAmpApp {
 
     fn play_from_folder(&mut self, index: usize, ctx: &egui::Context) {
         self.playlist.replace(self.library.tracks.clone(), index);
-        if let Some(track) = self.playlist.current_track().cloned() {
+        if let Some(track) = self.playlist.now_playing().cloned() {
             self.start_track(track, ctx);
         }
     }
@@ -156,9 +156,9 @@ impl UnAmpApp {
             PlayState::Playing => self.engine.seek(Duration::ZERO),
             PlayState::Loading => {}
             PlayState::Stopped => {
-                if let Some(track) = self.playlist.current_track().cloned() {
+                if let Some(track) = self.playlist.now_playing().cloned() {
                     self.start_track(track, ctx);
-                } else if !self.playlist.tracks.is_empty() {
+                } else if !self.playlist.tracks.is_empty() || !self.playlist.queue.is_empty() {
                     self.next(false, ctx);
                 } else if !self.library.tracks.is_empty() {
                     self.play_from_folder(0, ctx);
@@ -202,7 +202,8 @@ impl UnAmpApp {
             Some(info) => info.display_title(path),
             None => metadata::file_stem(path),
         };
-        let number = self.playlist.current.map(|i| format!("{}. ", i + 1)).unwrap_or_default();
+        // Queued tracks aren't at a playlist position, so they get no number.
+        let number = self.playlist.playing_index().map(|i| format!("{}. ", i + 1)).unwrap_or_default();
         let length = self
             .engine
             .duration()
@@ -499,12 +500,16 @@ impl UnAmpApp {
             ui.label(egui::RichText::new(name).strong().size(16.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let has_tracks = !self.library.tracks.is_empty();
-                if ui
-                    .add_enabled(has_tracks, egui::Button::new("\u{2795} Enqueue folder"))
-                    .clicked()
-                {
-                    self.playlist.enqueue(self.library.tracks.iter().cloned());
-                }
+                ui.add_enabled_ui(has_tracks, |ui| {
+                    ui.menu_button("\u{2795} Add folder \u{23F7}", |ui| {
+                        if ui.button("to queue").clicked() {
+                            self.playlist.add_to_queue(self.library.tracks.iter().cloned());
+                        }
+                        if ui.button("to playlist").clicked() {
+                            self.playlist.append(self.library.tracks.iter().cloned());
+                        }
+                    });
+                });
                 if ui
                     .add_enabled(has_tracks, egui::Button::new("\u{25B6} Play folder"))
                     .clicked()
@@ -516,21 +521,37 @@ impl UnAmpApp {
         ui.separator();
 
         let playing = self.engine.current().map(|p| p.to_path_buf());
-        match self.library.show_tracks(ui, playing.as_deref()) {
+        let action = self.library.show_tracks(ui, playing.as_deref());
+        let track = |i: usize| self.library.tracks.get(i).cloned();
+        match action {
             Some(TrackAction::Play(index)) => self.play_from_folder(index, ctx),
-            Some(TrackAction::Enqueue(indices)) => {
-                let tracks: Vec<Track> = indices
-                    .into_iter()
-                    .filter_map(|i| self.library.tracks.get(i).cloned())
-                    .collect();
-                self.playlist.enqueue(tracks);
+            Some(TrackAction::PlayNext(index)) => {
+                if let Some(t) = track(index) {
+                    self.playlist.play_next(t);
+                }
+            }
+            Some(TrackAction::AddToQueue(index)) => {
+                if let Some(t) = track(index) {
+                    self.playlist.add_to_queue([t]);
+                }
+            }
+            Some(TrackAction::AddToPlaylist(index)) => {
+                if let Some(t) = track(index) {
+                    self.playlist.append([t]);
+                }
             }
             None => {}
         }
     }
 
     fn show_playlist_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        if !self.playlist.queue.is_empty() {
+            self.show_up_next(ui, ctx);
+            ui.add_space(6.0);
+        }
+
         ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Playlist").strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add_enabled(!self.playlist.tracks.is_empty(), egui::Button::new("Clear"))
@@ -558,49 +579,151 @@ impl UnAmpApp {
             return;
         }
 
-        let mut play: Option<usize> = None;
-        let mut remove: Option<usize> = None;
-        let current = self.playlist.current;
+        let mut action: Option<PlaylistAction> = None;
+        let playing_index = self.playlist.playing_index();
         let playing = self.engine.state() != PlayState::Stopped;
         egui::ScrollArea::vertical()
+            .id_salt("playlist_rows")
             .auto_shrink([false, false])
             .show_rows(ui, library::ROW_HEIGHT, self.playlist.tracks.len(), |ui, range| {
                 for index in range {
                     let track = &self.playlist.tracks[index];
+                    let title = with_queue_marker(self.playlist.queue_position(&track.path), track.title());
                     let resp = library::track_row(
                         ui,
                         index,
-                        &track.title(),
+                        &title,
                         track.duration(),
-                        playing && current == Some(index),
+                        playing && playing_index == Some(index),
                         false,
                     );
                     if resp.double_clicked() {
-                        play = Some(index);
+                        action = Some(PlaylistAction::Play(index));
                     }
                     resp.context_menu(|ui| {
                         if ui.button("\u{25B6} Play").clicked() {
-                            play = Some(index);
+                            action = Some(PlaylistAction::Play(index));
+                        }
+                        if ui.button(library::PLAY_NEXT).clicked() {
+                            action = Some(PlaylistAction::PlayNext(index));
+                        }
+                        if ui.button(library::ADD_TO_QUEUE).clicked() {
+                            action = Some(PlaylistAction::AddToQueue(index));
                         }
                         if ui.button("\u{2796} Remove").clicked() {
-                            remove = Some(index);
+                            action = Some(PlaylistAction::Remove(index));
+                        }
+                    });
+                }
+            });
+        if let Some(action) = action {
+            self.apply_playlist_action(action, ctx);
+        }
+    }
+
+    /// The up-next queue, above the playlist while it has anything in it.
+    fn show_up_next(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(format!("Up next ({})", self.playlist.queue.len())).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Clear queue").clicked() {
+                    self.playlist.clear_queue();
+                }
+            });
+        });
+        ui.separator();
+
+        enum QueueAction {
+            PlayNow(usize),
+            MoveToFront(usize),
+            Remove(usize),
+        }
+        let mut action = None;
+        let rows = self.playlist.queue.len();
+        egui::ScrollArea::vertical()
+            .id_salt("up_next_rows")
+            .max_height(library::ROW_HEIGHT * 5.0)
+            .auto_shrink([false, true])
+            .show_rows(ui, library::ROW_HEIGHT, rows, |ui, range| {
+                for index in range {
+                    let track = &self.playlist.queue[index];
+                    let resp = library::track_row(ui, index, &track.title(), track.duration(), false, false);
+                    if resp.double_clicked() {
+                        action = Some(QueueAction::PlayNow(index));
+                    }
+                    resp.context_menu(|ui| {
+                        if ui.button("\u{25B6} Play now").clicked() {
+                            action = Some(QueueAction::PlayNow(index));
+                        }
+                        if index > 0 && ui.button(library::PLAY_NEXT).clicked() {
+                            action = Some(QueueAction::MoveToFront(index));
+                        }
+                        if ui.button("\u{2796} Remove from queue").clicked() {
+                            action = Some(QueueAction::Remove(index));
                         }
                     });
                 }
             });
 
-        if let Some(index) = play {
-            if let Some(track) = self.playlist.jump(index).cloned() {
-                self.start_track(track, ctx);
+        match action {
+            Some(QueueAction::PlayNow(index)) => {
+                if let Some(track) = self.playlist.play_from_queue(index).cloned() {
+                    self.start_track(track, ctx);
+                }
+            }
+            Some(QueueAction::MoveToFront(index)) => {
+                if let Some(track) = self.playlist.queue.remove(index) {
+                    self.playlist.play_next(track);
+                }
+            }
+            Some(QueueAction::Remove(index)) => self.playlist.remove_from_queue(index),
+            None => {}
+        }
+    }
+
+    /// Playlist-entry actions shared by the egui and classic playlists.
+    fn apply_playlist_action(&mut self, action: PlaylistAction, ctx: &egui::Context) {
+        match action {
+            PlaylistAction::Play(index) => {
+                if let Some(track) = self.playlist.jump(index).cloned() {
+                    self.start_track(track, ctx);
+                }
+            }
+            PlaylistAction::PlayNext(index) => {
+                if let Some(track) = self.playlist.tracks.get(index).cloned() {
+                    self.playlist.play_next(track);
+                }
+            }
+            PlaylistAction::AddToQueue(index) => {
+                if let Some(track) = self.playlist.tracks.get(index).cloned() {
+                    self.playlist.add_to_queue([track]);
+                }
+            }
+            PlaylistAction::Remove(index) => {
+                let was_playing = self.playlist.playing_index() == Some(index);
+                self.playlist.remove(index);
+                if was_playing {
+                    self.engine.stop();
+                }
             }
         }
-        if let Some(index) = remove {
-            let was_current = self.playlist.current == Some(index);
-            self.playlist.remove(index);
-            if was_current {
-                self.engine.stop();
-            }
-        }
+    }
+}
+
+/// What can be done to a playlist entry, from either playlist view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PlaylistAction {
+    Play(usize),
+    PlayNext(usize),
+    AddToQueue(usize),
+    Remove(usize),
+}
+
+/// Winamp shows a queued playlist entry's queue position before its title.
+fn with_queue_marker(position: Option<usize>, title: String) -> String {
+    match position {
+        Some(n) => format!("[{n}] {title}"),
+        None => title,
     }
 }
 
@@ -614,6 +737,12 @@ impl UnAmpApp {
         let title = self.now_playing_title().unwrap_or_else(|| "UnAmp".to_string());
         let info = self.now_info.as_ref().filter(|_| self.engine.current().is_some());
         let (bars, peaks) = self.visualizer.levels();
+        let queued: Vec<Option<usize>> = self
+            .playlist
+            .tracks
+            .iter()
+            .map(|t| self.playlist.queue_position(&t.path))
+            .collect();
         let view = classic::View {
             state: self.engine.state(),
             position: self.engine.position(),
@@ -632,7 +761,8 @@ impl UnAmpApp {
             bars,
             peaks,
             tracks: &self.playlist.tracks,
-            current: self.playlist.current,
+            current: self.playlist.playing_index(),
+            queued: &queued,
             total: self.playlist.tracks.iter().filter_map(|t| t.duration()).sum(),
             time: ctx.input(|i| i.time),
         };
@@ -698,11 +828,7 @@ impl UnAmpApp {
                     self.config.eq_preamp = snap.preamp;
                     self.config.eq_bands = snap.gains;
                 }
-                classic::Action::PlayTrack(index) => {
-                    if let Some(track) = self.playlist.jump(index).cloned() {
-                        self.start_track(track, ctx);
-                    }
-                }
+                classic::Action::Playlist(action) => self.apply_playlist_action(action, ctx),
             }
         }
     }
