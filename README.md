@@ -24,7 +24,11 @@ New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.
   ([ADR-0010](docs/adr/0010-classic-wsz-renderer.md))
 - 10-band graphic equalizer (60 Hz – 16 kHz) with preamp, presets and a live response curve;
   double-click a slider to zero it ([ADR-0007](docs/adr/0007-biquad-equalizer-in-source-chain.md))
-- Media Library: folder browser whose sidebar lists mounted drives, ZFS pools and network shares (NFS/SMB/sshfs/GVfs)
+- Search (**Ctrl+F**): finds tracks and folders anywhere under the current location by matching
+  every word against their paths, streaming results as it goes, no scan or database needed
+  ([ADR-0015](docs/adr/0015-search-by-walking.md))
+- Media Library: a collapsible folder tree that loads as you expand it, so slow shares never
+  freeze the window ([ADR-0014](docs/adr/0014-lazy-folder-tree.md)); the sidebar lists mounted drives, ZFS pools and network shares (NFS/SMB/sshfs/GVfs)
 - Plays MP3, FLAC, Ogg Vorbis, WAV, AAC/ALAC (`.m4a`), AIFF, CAF and MKA via symphonia
 - Reads tags (title, artist, album, track number, duration, bitrate) for the folder you're viewing
 - Album art from embedded covers, or `cover`/`folder`/`front`/`album` images beside the tracks
@@ -55,6 +59,7 @@ The classic bottom row, with nothing focused:
 | `V` | Stop |
 | `B` | Next |
 | `←` / `→` | Seek 5 s |
+| `Ctrl+F` | Search the Media Library |
 
 ## Skins
 

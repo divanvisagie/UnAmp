@@ -6,6 +6,8 @@ use std::sync::mpsc;
 
 use crate::locations::{self, Location};
 use crate::metadata::{self, TrackInfo};
+use crate::search::Search;
+use crate::tree::FolderTree;
 
 pub const ROW_HEIGHT: f32 = 22.0;
 
@@ -76,6 +78,10 @@ pub struct Library {
     tx: mpsc::Sender<InfoResult>,
     rx: mpsc::Receiver<InfoResult>,
     selected: Option<usize>,
+    /// The sidebar tree, rooted at the current location.
+    pub tree: FolderTree,
+    /// Search under the tree's root; while active it replaces the track list.
+    pub search: Search,
 }
 
 impl Library {
@@ -90,7 +96,7 @@ impl Library {
         let (tx, rx) = mpsc::channel();
         let mut lib = Self {
             path_edit: dir.display().to_string(),
-            current_dir: dir,
+            current_dir: dir.clone(),
             subdirs: Vec::new(),
             tracks: Vec::new(),
             pending_nav: None,
@@ -102,10 +108,47 @@ impl Library {
             tx,
             rx,
             selected: None,
+            tree: FolderTree::new(dir.clone(), String::new()),
+            search: Search::default(),
         };
         lib.scan_locations();
+        let (root, label) = lib.location_for(&lib.current_dir);
+        lib.tree.set_root(root, label);
+        lib.tree.reveal(&dir);
         lib.scan(ctx);
         lib
+    }
+
+    /// The places the sidebar lists, as (path, label): Home, Music,
+    /// Computer, then storage and network mounts.
+    fn locations(&self) -> Vec<(PathBuf, String)> {
+        let mut out = Vec::new();
+        if let Some(home) = dirs::home_dir() {
+            out.push((home, "Home".to_string()));
+        }
+        if let Some(music) = dirs::audio_dir().filter(|p| p.is_dir()) {
+            out.push((music, "Music".to_string()));
+        }
+        out.push((PathBuf::from("/"), "Computer".to_string()));
+        for loc in self.storage_locations.iter().chain(&self.network_locations) {
+            out.push((loc.path.clone(), loc.label.clone()));
+        }
+        out
+    }
+
+    /// The most specific sidebar location containing `path`, for rooting
+    /// the tree when you navigate by path bar.
+    fn location_for(&self, path: &Path) -> (PathBuf, String) {
+        self.locations()
+            .into_iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .unwrap_or_else(|| (PathBuf::from("/"), "Computer".to_string()))
+    }
+
+    /// The tracks the list shows: search results while searching, else the folder's.
+    pub fn visible_tracks(&self) -> &[Track] {
+        if self.search.is_active() { &self.search.tracks } else { &self.tracks }
     }
 
     fn scan_locations(&mut self) {
@@ -189,8 +232,18 @@ impl Library {
             self.path_edit = self.current_dir.display().to_string();
             self.path_error = None;
             self.scan_locations();
+            if !self.current_dir.starts_with(self.tree.root()) {
+                let (root, label) = self.location_for(&self.current_dir);
+                self.tree.set_root(root, label);
+            }
+            // Entering a folder re-lists it, so the tree picks up changes.
+            self.tree.refresh(&self.current_dir);
+            self.tree.reveal(&self.current_dir);
             self.scan(ctx);
         }
+        self.tree.poll();
+        let now = ctx.input(|i| i.time);
+        self.search.poll(self.tree.root(), now, ctx);
         while let Ok(InfoResult { generation, index, info }) = self.rx.try_recv() {
             if generation == self.generation {
                 if let Some(track) = self.tracks.get_mut(index) {
@@ -203,6 +256,8 @@ impl Library {
     /// Renders the left-hand sidebar: locations, path bar, subfolders.
     pub fn show_sidebar(&mut self, ui: &mut egui::Ui) {
         let mut nav_to: Option<PathBuf> = None;
+        // A clicked location becomes the tree's root, even if it's inside another.
+        let mut new_root: Option<(PathBuf, String)> = None;
 
         ui.label(egui::RichText::new("LOCATIONS").weak().small());
         let mut places: Vec<(PathBuf, &str, &str)> = Vec::new();
@@ -214,12 +269,13 @@ impl Library {
         }
         places.push((PathBuf::from("/"), "\u{1F4BB}", "Computer"));
         for (path, icon, label) in places {
-            let is_current = path == self.current_dir;
+            let is_current = path == self.tree.root();
             if ui
                 .selectable_label(is_current, format!("{icon} {label}"))
                 .on_hover_text(path.display().to_string())
                 .clicked()
             {
+                new_root = Some((path.clone(), label.to_string()));
                 nav_to = Some(path);
             }
         }
@@ -234,12 +290,13 @@ impl Library {
             }
             ui.label(egui::RichText::new(heading).weak().small());
             for loc in list {
-                let is_current = loc.path == self.current_dir;
+                let is_current = loc.path == self.tree.root();
                 if ui
                     .selectable_label(is_current, format!("{icon} {}", loc.label))
                     .on_hover_text(&loc.detail)
                     .clicked()
                 {
+                    new_root = Some((loc.path.clone(), loc.label.clone()));
                     nav_to = Some(loc.path.clone());
                 }
             }
@@ -291,29 +348,42 @@ impl Library {
         ui.add_space(4.0);
         ui.separator();
 
-        if !self.subdirs.is_empty() {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new("FOLDERS").weak().small());
-            for (path, name) in &self.subdirs {
-                if ui.button(format!("\u{1F4C1} {name}")).clicked() {
-                    nav_to = Some(path.clone());
-                }
-            }
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new("FOLDERS").weak().small());
+        if let Some(path) = self.tree.show(ui, &self.current_dir) {
+            nav_to = Some(path);
         }
 
+        if let Some((root, label)) = new_root {
+            self.tree.set_root(root, label);
+        }
         if let Some(nav) = nav_to {
             self.navigate(nav);
         }
     }
 
-    /// Renders the current folder's tracks. Double-click plays the folder
-    /// from that track; the context menu can enqueue instead.
+    /// Renders the current folder's tracks, or the search results while
+    /// searching. Double-click plays the list from that track; the context
+    /// menu queues or adds to the playlist instead.
     pub fn show_tracks(&mut self, ui: &mut egui::Ui, playing: Option<&Path>) -> Option<TrackAction> {
-        if let Some(err) = &self.scan_error {
+        let searching = self.search.is_active();
+        if searching && self.search.tracks.is_empty() {
+            ui.centered_and_justified(|ui| {
+                if self.search.running {
+                    ui.label("Searching…");
+                } else if self.search.folders.is_empty() {
+                    ui.label(format!("Nothing matches in {}", self.tree.root_label()));
+                } else {
+                    ui.label("No tracks match, only folders (above)");
+                }
+            });
+            return None;
+        }
+        if let Some(err) = self.scan_error.as_ref().filter(|_| !searching) {
             ui.centered_and_justified(|ui| ui.label(err.as_str()));
             return None;
         }
-        if self.tracks.is_empty() {
+        if !searching && self.tracks.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label(if self.subdirs.is_empty() {
                     "No music in this folder"
@@ -325,23 +395,34 @@ impl Library {
         }
 
         let mut action = None;
+        let list: &[Track] = if searching { &self.search.tracks } else { &self.tracks };
+        let root = self.tree.root();
+        let selected = &mut self.selected;
         egui::ScrollArea::vertical()
+            .id_salt(if searching { "search_rows" } else { "folder_rows" })
             .auto_shrink([false, false])
-            .show_rows(ui, ROW_HEIGHT, self.tracks.len(), |ui, range| {
+            .show_rows(ui, ROW_HEIGHT, list.len(), |ui, range| {
                 for index in range {
-                    let track = &self.tracks[index];
+                    let track = &list[index];
+                    // Results come from all over, so show where each one lives.
+                    let title = match track.path.parent().and_then(|p| p.strip_prefix(root).ok()) {
+                        Some(folder) if searching && !folder.as_os_str().is_empty() => {
+                            format!("{}  —  {}", track.title(), folder.display())
+                        }
+                        _ => track.title(),
+                    };
                     let resp = track_row(
                         ui,
                         index,
-                        &track.title(),
+                        &title,
                         track.duration(),
                         playing == Some(track.path.as_path()),
-                        self.selected == Some(index),
+                        *selected == Some(index),
                     );
                     if resp.double_clicked() {
                         action = Some(TrackAction::Play(index));
                     } else if resp.clicked() {
-                        self.selected = Some(index);
+                        *selected = Some(index);
                     }
                     resp.context_menu(|ui| {
                         if ui.button("\u{25B6} Play").clicked() {

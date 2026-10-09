@@ -4,7 +4,8 @@ Date: 2026-10-09
 
 ## Status
 
-Proposed
+Proposed. Its "no library-wide search" consequence is superseded by
+[ADR-0015](0015-search-by-walking.md), which adds search without a database.
 
 ## Context
 

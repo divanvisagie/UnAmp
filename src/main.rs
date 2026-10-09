@@ -7,8 +7,10 @@ mod locations;
 mod metadata;
 mod player;
 mod playlist;
+mod search;
 mod session;
 mod skin;
+mod tree;
 mod visualizer;
 mod wsz;
 
@@ -33,7 +35,7 @@ fn build_window_icon() -> egui::IconData {
 fn main() -> eframe::Result {
     let config = AppConfig::load();
 
-    let width = config.window_width.unwrap_or(1240.0);
+    let width = config.window_width.unwrap_or(1285.0);
     let height = config.window_height.unwrap_or(860.0);
 
     let native_options = eframe::NativeOptions {

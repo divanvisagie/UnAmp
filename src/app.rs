@@ -18,6 +18,8 @@ const ART_SIZE: f32 = 132.0;
 /// stack (player, equalizer, playlist) lines up.
 const STACK_WIDTH: f32 = 540.0;
 const SEEK_STEP: Duration = Duration::from_secs(5);
+/// Id of the Media Library's search box, so Ctrl+F can focus it.
+const SEARCH_BOX: &str = "library_search";
 
 /// Fresh tags and cover for the now-playing track, read off the UI thread.
 struct NowPlayingResult {
@@ -130,8 +132,10 @@ impl UnAmpApp {
         }
     }
 
+    /// Plays what the library is showing (the folder, or search results)
+    /// as the new playlist, starting at `index`.
     fn play_from_folder(&mut self, index: usize, ctx: &egui::Context) {
-        self.playlist.replace(self.library.tracks.clone(), index);
+        self.playlist.replace(self.library.visible_tracks().to_vec(), index);
         if let Some(track) = self.playlist.now_playing().cloned() {
             self.start_track(track, ctx);
         }
@@ -179,6 +183,10 @@ impl UnAmpApp {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
+            self.config.show_library = true;
+            ctx.memory_mut(|m| m.request_focus(egui::Id::new(SEARCH_BOX)));
+        }
         if ctx.memory(|m| m.focused().is_some()) {
             return;
         }
@@ -500,40 +508,128 @@ impl UnAmpApp {
             .show(ui, |ui| self.show_folder_view(ui, ctx));
     }
 
+    fn show_search_bar(&mut self, ui: &mut egui::Ui) {
+        let now = ui.input(|i| i.time);
+        let search = &mut self.library.search;
+        let active = search.is_active();
+        // Right to left, so the clear button takes its width first and the
+        // box fills exactly what's left (a guessed width made the resizable
+        // window grow a few pixels every frame).
+        // (Inside a horizontal row so the layout only takes one line.)
+        ui.horizontal(|ui| ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if active && ui.button("\u{2716}").on_hover_text("Clear search (Esc)").clicked() {
+                search.clear();
+            }
+            let hint = format!("\u{1F50D} Search {}  (Ctrl+F)", self.library.tree.root_label());
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut search.query)
+                    .id(egui::Id::new(SEARCH_BOX))
+                    .hint_text(hint)
+                    .desired_width(ui.available_width()),
+            );
+            if resp.changed() {
+                search.edited(now);
+            }
+            if resp.lost_focus() {
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    search.submit();
+                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    search.clear();
+                }
+            }
+        }));
+    }
+
     fn show_folder_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.show_search_bar(ui);
+        ui.add_space(4.0);
+        let searching = self.library.search.is_active();
+
         ui.horizontal(|ui| {
-            let name = self
-                .library
-                .current_dir
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| self.library.current_dir.display().to_string());
-            ui.label(egui::RichText::new(name).strong().size(16.0));
+            if searching {
+                ui.label(egui::RichText::new(format!("In {}", self.library.tree.root_label())).strong().size(16.0));
+            } else {
+                let name = self
+                    .library
+                    .current_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| self.library.current_dir.display().to_string());
+                ui.label(egui::RichText::new(name).strong().size(16.0));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let has_tracks = !self.library.tracks.is_empty();
+                let has_tracks = !self.library.visible_tracks().is_empty();
+                let what = if searching { "results" } else { "folder" };
                 ui.add_enabled_ui(has_tracks, |ui| {
-                    ui.menu_button("\u{2795} Add folder \u{23F7}", |ui| {
+                    ui.menu_button(format!("\u{2795} Add {what} \u{23F7}"), |ui| {
                         if ui.button("to queue").clicked() {
-                            self.playlist.add_to_queue(self.library.tracks.iter().cloned());
+                            self.playlist.add_to_queue(self.library.visible_tracks().iter().cloned());
                         }
                         if ui.button("to playlist").clicked() {
-                            self.playlist.append(self.library.tracks.iter().cloned());
+                            self.playlist.append(self.library.visible_tracks().iter().cloned());
                         }
                     });
                 });
                 if ui
-                    .add_enabled(has_tracks, egui::Button::new("\u{25B6} Play folder"))
+                    .add_enabled(has_tracks, egui::Button::new(format!("\u{25B6} Play {what}")))
                     .clicked()
                 {
                     self.play_from_folder(0, ctx);
                 }
             });
         });
+
+        if searching {
+            let search = &self.library.search;
+            let mut status = format!("{} tracks", search.tracks.len());
+            if !search.folders.is_empty() {
+                status.push_str(&format!(", {} folders", search.folders.len()));
+            }
+            if search.running {
+                status.push_str(&format!(" · searching ({} folders read)", search.scanned));
+            } else if search.truncated {
+                status.push_str(" · stopped at the limit, refine the search");
+            }
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(status).weak());
+                if search.running {
+                    ui.spinner();
+                }
+            });
+        }
+
+        // Folders whose path matches: open one to browse it.
+        if searching && !self.library.search.folders.is_empty() {
+            let root = self.library.tree.root().to_path_buf();
+            let mut open = None;
+            egui::ScrollArea::vertical()
+                .id_salt("search_folders")
+                .max_height(64.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for folder in &self.library.search.folders {
+                            let rel = folder.strip_prefix(&root).unwrap_or(folder);
+                            if ui
+                                .button(format!("\u{1F4C1} {}", rel.display()))
+                                .on_hover_text("Open this folder")
+                                .clicked()
+                            {
+                                open = Some(folder.clone());
+                            }
+                        }
+                    });
+                });
+            if let Some(folder) = open {
+                self.library.search.clear();
+                self.library.navigate(folder);
+            }
+        }
         ui.separator();
 
         let playing = self.engine.current().map(|p| p.to_path_buf());
         let action = self.library.show_tracks(ui, playing.as_deref());
-        let track = |i: usize| self.library.tracks.get(i).cloned();
+        let track = |i: usize| self.library.visible_tracks().get(i).cloned();
         match action {
             Some(TrackAction::Play(index)) => self.play_from_folder(index, ctx),
             Some(TrackAction::PlayNext(index)) => {
@@ -767,7 +863,7 @@ impl UnAmpApp {
             eq: self.eq.snapshot(),
             bars,
             peaks,
-            tracks: &self.playlist.tracks(),
+            tracks: self.playlist.tracks(),
             current: self.playlist.playing_index(),
             queued: &queued,
             total: self.playlist.tracks().iter().filter_map(|t| t.duration()).sum(),
@@ -1090,10 +1186,11 @@ impl eframe::App for UnAmpApp {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
 
-        if let Some(rect) = ctx.input(|i| i.viewport().inner_rect) {
-            self.config.window_width = Some(rect.width());
-            self.config.window_height = Some(rect.height());
-        }
+        // The content rect, not viewport().inner_rect: on Wayland a window
+        // can't know its position, so inner_rect is always None there.
+        let size = ctx.content_rect().size();
+        self.config.window_width = Some(size.x);
+        self.config.window_height = Some(size.y);
 
         self.library.poll(ctx);
         self.engine.poll();
@@ -1146,6 +1243,18 @@ impl eframe::App for UnAmpApp {
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    // Window size in physical pixels, styled like the version label.
+                    let size = ctx.content_rect().size() * ctx.pixels_per_point();
+                    ui.label(
+                        egui::RichText::new(format!("{} \u{00D7} {}", size.x.round(), size.y.round()))
+                            .weak()
+                            .small(),
+                    )
+                    .on_hover_text("Window size in pixels");
+                    let error = self.engine.error.as_ref().or(self.session_error.as_ref());
+                    if error.is_some() || self.engine.state() == PlayState::Loading {
+                        ui.separator();
+                    }
                     if let Some(err) = self.engine.error.as_ref().or(self.session_error.as_ref()) {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     } else if self.engine.state() == PlayState::Loading {

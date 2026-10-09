@@ -42,7 +42,7 @@ mechanics of adding one.
 |---|-------|--------|
 | [0001](0001-linux-only-egui-native-app.md) | Build UnAmp as a Linux-only native egui/eframe app, following Photograph | Accepted |
 | [0002](0002-stock-egui-style.md) | Use egui's stock style instead of a custom theme | Superseded by [ADR-0008](0008-toml-skins.md) |
-| [0003](0003-browse-folders-no-library-database.md) | Browse folders directly instead of scanning into a library database | Proposed |
+| [0003](0003-browse-folders-no-library-database.md) | Browse folders directly instead of scanning into a library database | Proposed (no-search consequence superseded by [ADR-0015](0015-search-by-walking.md)) |
 | [0004](0004-file-io-off-ui-thread.md) | Keep track I/O off the UI thread, with rodio/symphonia for playback and lofty for tags | Proposed |
 | [0005](0005-reuse-photograph-mount-discovery.md) | Copy Photograph's mount discovery rather than sharing a crate | Proposed |
 | [0006](0006-floating-egui-windows.md) | Use floating egui windows for the player, equalizer, playlist and media library | Accepted |
@@ -53,6 +53,8 @@ mechanics of adding one.
 | [0011](0011-built-in-skins-compiled-in-copy-out.md) | Keep built-in skins compiled in, with a non-overwriting "copy to folder" for editing | Accepted |
 | [0012](0012-up-next-queue.md) | Add an "up next" queue that plays before the playlist continues | Proposed |
 | [0013](0013-save-session-as-m3u.md) | Save the playlist and queue as extended M3U files, after every change | Proposed |
+| [0014](0014-lazy-folder-tree.md) | Show folders as a lazily loaded tree rooted at the current location | Proposed |
+| [0015](0015-search-by-walking.md) | Search the current location by walking its folders, without an index | Proposed |
 
 ## Decision Relationship
 
@@ -73,6 +75,10 @@ flowchart TD
     C --> L[0012: Up-next queue]
     L --> M[0013: Save playlist and queue as M3U]
     D --> M
+    C --> N[0014: Lazy folder tree]
+    D --> N
+    C --> O[0015: Search by walking folders]
+    N --> O
 ```
 
 ## Revisit Triggers
@@ -80,7 +86,8 @@ flowchart TD
 - A hung network mount freezes the UI while navigating into it — move directory listing to a
   worker ([ADR-0004](0004-file-io-off-ui-thread.md)).
 - Opus (or other symphonia-unsupported formats) becomes a real need — revisit the decoder.
-- Demand for artist/album browsing or library-wide search — see [ADR-0003](0003-browse-folders-no-library-database.md).
+- Demand for artist/album browsing or tag search, or path search gets too slow on big shares —
+  see [ADR-0003](0003-browse-folders-no-library-database.md) and [ADR-0015](0015-search-by-walking.md).
 - Multi-monitor use or a mini player needs real OS windows — see [ADR-0006](0006-floating-egui-windows.md).
 - Clipping from EQ boosts is audible in practice — add a limiter ([ADR-0007](0007-biquad-equalizer-in-source-chain.md)).
 - Classic skins need windowshade mode, other scales or a resizable playlist — see the
