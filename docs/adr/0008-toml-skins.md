@@ -4,7 +4,8 @@ Date: 2026-10-09
 
 ## Status
 
-Accepted
+Accepted. Ruling out bitmap skins is superseded by [ADR-0010](0010-classic-wsz-renderer.md)
+for classic `.wsz` skins; TOML colour skins are unchanged.
 
 ## Context
 

@@ -45,7 +45,9 @@ mechanics of adding one.
 | [0005](0005-reuse-photograph-mount-discovery.md) | Copy Photograph's mount discovery rather than sharing a crate | Proposed |
 | [0006](0006-floating-egui-windows.md) | Use floating egui windows for the player, equalizer, playlist and media library | Accepted |
 | [0007](0007-biquad-equalizer-in-source-chain.md) | Implement the equalizer as peaking biquads in a rodio `Source`, ahead of the visualizer tap | Proposed |
-| [0008](0008-toml-skins.md) | Support skins as TOML files, keeping stock egui as the default | Accepted |
+| [0008](0008-toml-skins.md) | Support skins as TOML files, keeping stock egui as the default | Accepted (bitmap exclusion superseded by [ADR-0010](0010-classic-wsz-renderer.md)) |
+| [0009](0009-convert-winamp-wsz-colours.md) | Convert classic Winamp `.wsz` skins to TOML skins, colours only | Superseded by [ADR-0010](0010-classic-wsz-renderer.md) |
+| [0010](0010-classic-wsz-renderer.md) | Render classic `.wsz` skins pixel-for-pixel in fixed-size windows | Accepted |
 
 ## Decision Relationship
 
@@ -59,6 +61,9 @@ flowchart TD
     D --> G[0007: Biquad EQ in the Source chain]
     F --> G
     B --> H[0008: TOML skins]
+    H --> I[0009: Convert .wsz colours to TOML]
+    I --> J[0010: Classic .wsz renderer]
+    F --> J
 ```
 
 ## Revisit Triggers

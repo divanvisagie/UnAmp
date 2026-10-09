@@ -1,7 +1,8 @@
 //! Skins: TOML files that recolour egui's widgets and UnAmp's own painted
 //! parts (spectrum, time display, seek bar). "Default" is stock egui and
 //! follows the system theme; others are built in from `skins/` or loaded
-//! from `~/.config/unamp/skins/*.toml`.
+//! from `~/.config/unamp/skins/*.toml` — where classic Winamp `.wsz`
+//! skins are also converted to TOML (see `wsz.rs`).
 
 use std::path::{Path, PathBuf};
 
@@ -36,6 +37,10 @@ pub struct Skin {
     pub corner_radius: Option<u8>,
     #[serde(default)]
     pub shadows: Option<bool>,
+    /// A classic Winamp `.wsz`, relative to this file, whose bitmaps draw
+    /// the Player, Equalizer and Playlist windows (see ADR-0010).
+    #[serde(default)]
+    pub classic: Option<String>,
     #[serde(default)]
     pub colors: Colors,
     #[serde(default)]
@@ -74,6 +79,8 @@ pub struct PlayerColors {
     pub spectrum_mid: Option<Hex>,
     pub spectrum_high: Option<Hex>,
     pub spectrum_peak: Option<Hex>,
+    /// Full bar gradient, bottom to top; overrides the low/mid/high stops.
+    pub spectrum: Option<Vec<Hex>>,
 }
 
 /// A colour written as `#RRGGBB` or `#RRGGBBAA`.
@@ -100,7 +107,7 @@ fn parse_hex(s: &str) -> Option<Color32> {
 }
 
 /// Resolved colours for the parts UnAmp paints itself.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Palette {
     pub display: Color32,
     pub time: Color32,
@@ -109,6 +116,8 @@ pub struct Palette {
     pub spectrum_mid: Color32,
     pub spectrum_high: Color32,
     pub spectrum_peak: Color32,
+    /// Full gradient (bottom to top), when the skin gives one.
+    pub spectrum_stops: Vec<Color32>,
     /// Corner rounding for painted boxes, matching the skin's widgets.
     pub radius: f32,
 }
@@ -117,6 +126,11 @@ impl Palette {
     /// Bar colour at height `t` (0 = bottom, 1 = top): low → mid → high.
     pub fn spectrum(&self, t: f32) -> Color32 {
         let t = t.clamp(0.0, 1.0);
+        if self.spectrum_stops.len() >= 2 {
+            let pos = t * (self.spectrum_stops.len() - 1) as f32;
+            let i = (pos.floor() as usize).min(self.spectrum_stops.len() - 2);
+            return lerp(self.spectrum_stops[i], self.spectrum_stops[i + 1], pos - i as f32);
+        }
         if t < 0.6 {
             lerp(self.spectrum_low, self.spectrum_mid, t / 0.6)
         } else {
@@ -138,6 +152,7 @@ impl Skin {
             base: None,
             corner_radius: None,
             shadows: None,
+            classic: None,
             colors: Colors::default(),
             player: PlayerColors::default(),
             path: None,
@@ -278,6 +293,7 @@ impl Skin {
             spectrum_mid: or(p.spectrum_mid, Color32::from_rgb(230, 210, 30)),
             spectrum_high: or(p.spectrum_high, Color32::from_rgb(230, 0, 30)),
             spectrum_peak: or(p.spectrum_peak, Color32::from_gray(200)),
+            spectrum_stops: p.spectrum.iter().flatten().map(|h| h.0).collect(),
             radius: self.corner_radius.map(f32::from).unwrap_or(2.0),
         }
     }
@@ -300,6 +316,8 @@ pub fn load_all() -> (Vec<Skin>, Vec<String>) {
         }
     }
     if let Some(dir) = user_skins_dir() {
+        // Classic Winamp skins dropped in the folder become TOML first.
+        errors.extend(crate::wsz::convert_new_in(&dir));
         let (user, user_errors) = load_dir(&dir);
         errors.extend(user_errors);
         for skin in user {
@@ -385,6 +403,15 @@ mod tests {
         assert!(err.contains("bakground"), "{err}");
         let err = Skin::parse("name = \"X\"\n[colors]\ntext = \"green\"").unwrap_err();
         assert!(err.contains("invalid colour"), "{err}");
+    }
+
+    #[test]
+    fn full_spectrum_list_overrides_stops() {
+        let skin = Skin::parse("name = \"S\"\n[player]\nspectrum = [\"#0000FF\", \"#00FF00\", \"#FF0000\"]").unwrap();
+        let p = skin.palette(&egui::Visuals::dark());
+        assert_eq!(p.spectrum(0.0), Color32::BLUE);
+        assert_eq!(p.spectrum(0.5), Color32::GREEN);
+        assert_eq!(p.spectrum(1.0), Color32::RED);
     }
 
     #[test]

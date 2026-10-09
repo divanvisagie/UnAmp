@@ -1,4 +1,5 @@
 mod app;
+mod classic;
 mod config;
 mod eq;
 mod library;
@@ -8,6 +9,7 @@ mod player;
 mod playlist;
 mod skin;
 mod visualizer;
+mod wsz;
 
 use app::UnAmpApp;
 use config::AppConfig;

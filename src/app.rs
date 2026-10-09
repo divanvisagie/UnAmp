@@ -7,6 +7,7 @@ use crate::library::{self, Library, Track, TrackAction};
 use crate::metadata::{self, TrackInfo};
 use crate::player::{Engine, PlayState};
 use crate::playlist::Playlist;
+use crate::classic::{self, ClassicSkin};
 use crate::skin::{self, Palette, Skin};
 use crate::visualizer::Visualizer;
 
@@ -35,6 +36,8 @@ pub struct UnAmpApp {
     /// Problems loading skin files, shown in the Skins menu.
     skin_errors: Vec<String>,
     palette: Palette,
+    /// Bitmaps for the Player/EQ/Playlist when the skin has a `classic` file.
+    classic: Option<ClassicSkin>,
     now_info: Option<TrackInfo>,
     art: Option<egui::TextureHandle>,
     art_generation: u64,
@@ -52,13 +55,14 @@ impl UnAmpApp {
         let engine = Engine::new(config.volume, Arc::clone(&eq));
         let visualizer = Visualizer::new(engine.tap());
         let (art_tx, art_rx) = mpsc::channel();
-        let (skins, skin_errors) = skin::load_all();
+        let (skins, mut skin_errors) = skin::load_all();
         let current = skins
             .iter()
             .find(|s| s.name == config.skin)
             .cloned()
             .unwrap_or_else(Skin::default_skin);
         let palette = current.apply(&cc.egui_ctx);
+        let classic = load_classic(&current, &cc.egui_ctx, &mut skin_errors);
         Self {
             config,
             library,
@@ -69,6 +73,7 @@ impl UnAmpApp {
             skins,
             skin_errors,
             palette,
+            classic,
             now_info: None,
             art: None,
             art_generation: 0,
@@ -597,6 +602,108 @@ impl UnAmpApp {
 }
 
 impl UnAmpApp {
+    fn show_classic_windows(
+        &mut self,
+        ctx: &egui::Context,
+        skin: &mut ClassicSkin,
+        origin: egui::Pos2,
+    ) {
+        let title = self.now_playing_title().unwrap_or_else(|| "UnAmp".to_string());
+        let info = self.now_info.as_ref().filter(|_| self.engine.current().is_some());
+        let (bars, peaks) = self.visualizer.levels();
+        let view = classic::View {
+            state: self.engine.state(),
+            position: self.engine.position(),
+            duration: self.engine.duration(),
+            title: &title,
+            kbps: info.and_then(|i| i.bitrate_kbps),
+            khz: info.and_then(|i| i.sample_rate).map(|r| r / 1000),
+            channels: info.and_then(|i| i.channels),
+            volume: self.config.volume,
+            shuffle: self.config.shuffle,
+            repeat: self.config.repeat,
+            show_remaining: self.config.show_remaining,
+            eq_open: self.config.show_equalizer,
+            pl_open: self.config.show_playlist,
+            eq: self.eq.snapshot(),
+            bars,
+            peaks,
+            tracks: &self.playlist.tracks,
+            current: self.playlist.current,
+            total: self.playlist.tracks.iter().filter_map(|t| t.duration()).sum(),
+            time: ctx.input(|i| i.time),
+        };
+
+        // Fixed-size, frameless windows stacked like Winamp's; drag them
+        // by any part that isn't a control.
+        let mut actions = Vec::new();
+        // Unconstrained: egui's desktop constraint pushed the frameless
+        // playlist up over the equalizer even when the stack fit (measured
+        // 2026-10-09). Windows → Reset layout recovers a window lost off-screen.
+        let window = |id: &str, y: f32, size: egui::Vec2| {
+            egui::Window::new(id)
+                .id(egui::Id::new(id))
+                .title_bar(false)
+                .frame(egui::Frame::NONE)
+                .resizable(false)
+                .fixed_size(size * classic::SCALE)
+                .default_pos(origin + egui::vec2(0.0, y))
+                .constrain(false)
+        };
+        let row = classic::MAIN_SIZE.y * classic::SCALE;
+        if self.config.show_player {
+            window("classic_player", 0.0, classic::MAIN_SIZE).show(ctx, |ui| classic::show_player(ui, skin, &view, &mut actions));
+        }
+        if self.config.show_equalizer {
+            window("classic_equalizer", row, classic::EQ_SIZE).show(ctx, |ui| classic::show_eq(ui, skin, &view, &mut actions));
+        }
+        if self.config.show_playlist {
+            window("classic_playlist", row * 2.0, classic::PLAYLIST_SIZE).show(ctx, |ui| classic::show_playlist(ui, skin, &view, &mut actions));
+        }
+
+        let duration = view.duration;
+        for action in actions {
+            match action {
+                classic::Action::Previous => self.previous(ctx),
+                classic::Action::Play => self.play(ctx),
+                classic::Action::Pause => self.engine.toggle_pause(),
+                classic::Action::Stop => self.engine.stop(),
+                classic::Action::Next => self.next(false, ctx),
+                // Winamp's eject opens files; ours opens the library.
+                classic::Action::Eject => self.config.show_library = true,
+                classic::Action::Seek(f) => {
+                    if let Some(d) = duration {
+                        self.engine.seek(d.mul_f32(f));
+                    }
+                }
+                classic::Action::Volume(v) => {
+                    self.config.volume = v;
+                    self.engine.set_volume(v);
+                }
+                classic::Action::ToggleShuffle => self.config.shuffle = !self.config.shuffle,
+                classic::Action::CycleRepeat => self.config.repeat = self.config.repeat.next(),
+                classic::Action::ToggleEq => self.config.show_equalizer = !self.config.show_equalizer,
+                classic::Action::TogglePlaylist => self.config.show_playlist = !self.config.show_playlist,
+                classic::Action::ToggleRemaining => self.config.show_remaining = !self.config.show_remaining,
+                classic::Action::ClosePlayer => self.config.show_player = false,
+                classic::Action::CloseEq => self.config.show_equalizer = false,
+                classic::Action::ClosePlaylist => self.config.show_playlist = false,
+                classic::Action::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
+                classic::Action::Eq(snap) => {
+                    self.eq.set(snap);
+                    self.config.eq_enabled = snap.enabled;
+                    self.config.eq_preamp = snap.preamp;
+                    self.config.eq_bands = snap.gains;
+                }
+                classic::Action::PlayTrack(index) => {
+                    if let Some(track) = self.playlist.jump(index).cloned() {
+                        self.start_track(track, ctx);
+                    }
+                }
+            }
+        }
+    }
+
     fn show_skins_menu(&mut self, ui: &mut egui::Ui) {
         let mut chosen = None;
         for skin in &self.skins {
@@ -615,6 +722,7 @@ impl UnAmpApp {
         }
         if let Some(skin) = chosen {
             self.palette = skin.apply(ui.ctx());
+            self.classic = load_classic(&skin, ui.ctx(), &mut self.skin_errors);
             self.config.skin = skin.name;
         }
 
@@ -631,6 +739,7 @@ impl UnAmpApp {
                 .unwrap_or_else(Skin::default_skin);
             self.config.skin = current.name.clone();
             self.palette = current.apply(ui.ctx());
+            self.classic = load_classic(&current, ui.ctx(), &mut self.skin_errors);
         }
         if let Some(dir) = skin::user_skins_dir() {
             if ui
@@ -776,6 +885,19 @@ fn marquee(ui: &mut egui::Ui, text: &str, scrolling: bool, color: egui::Color32)
     painter.galley(rect.min + egui::vec2(span - offset, 0.0), galley, color);
 }
 
+/// Loads the skin's classic `.wsz` (if it names one), noting failures.
+fn load_classic(skin: &Skin, ctx: &egui::Context, errors: &mut Vec<String>) -> Option<ClassicSkin> {
+    let file = skin.classic.as_ref()?;
+    let path = skin.path.as_ref()?.parent()?.join(file);
+    match ClassicSkin::load(&path, ctx) {
+        Ok(classic) => Some(classic),
+        Err(e) => {
+            errors.push(format!("{}: {e}", skin.name));
+            None
+        }
+    }
+}
+
 fn version_label() -> String {
     format!("UnAmp v{}", env!("CARGO_PKG_VERSION"))
 }
@@ -856,12 +978,15 @@ impl eframe::App for UnAmpApp {
         // The desktop the windows float on.
         let desktop = egui::CentralPanel::default()
             .show(ui, |ui| {
+                // A whisper of the text colour over the background, so the
+                // watermark stays faint whatever the skin's contrast.
+                let visuals = ui.visuals();
+                let watermark = egui::Color32::from(egui::lerp(
+                    egui::Rgba::from(visuals.panel_fill)..=egui::Rgba::from(visuals.text_color()),
+                    0.06,
+                ));
                 ui.centered_and_justified(|ui| {
-                    ui.label(
-                        egui::RichText::new("UnAmp")
-                            .size(64.0)
-                            .color(ui.visuals().faint_bg_color),
-                    );
+                    ui.label(egui::RichText::new("UnAmp").size(64.0).color(watermark));
                 });
             })
             .response
@@ -871,40 +996,45 @@ impl eframe::App for UnAmpApp {
 
         // Default layout: the classic stack on the left, library on the right.
         // egui remembers where the user moves and resizes them.
-        let mut open = self.config.show_player;
-        egui::Window::new("UnAmp")
-            .id(egui::Id::new("player_window"))
-            .open(&mut open)
-            .resizable(false)
-            .collapsible(true)
-            .default_pos([left, top])
-            .constrain_to(desktop)
-            .show(ctx, |ui| self.show_player(ui));
-        self.config.show_player = open;
+        if let Some(mut skin) = self.classic.take() {
+            self.show_classic_windows(ctx, &mut skin, egui::pos2(left, top));
+            self.classic = Some(skin);
+        } else {
+            let mut open = self.config.show_player;
+            egui::Window::new("UnAmp")
+                .id(egui::Id::new("player_window"))
+                .open(&mut open)
+                .resizable(false)
+                .collapsible(true)
+                .default_pos([left, top])
+                .constrain_to(desktop)
+                .show(ctx, |ui| self.show_player(ui));
+            self.config.show_player = open;
 
-        let mut open = self.config.show_equalizer;
-        egui::Window::new("Equalizer")
-            .id(egui::Id::new("equalizer_window"))
-            .open(&mut open)
-            .resizable(false)
-            .collapsible(true)
-            .default_pos([left, top + 200.0])
-            .constrain_to(desktop)
-            .show(ctx, |ui| self.show_equalizer(ui));
-        self.config.show_equalizer = open;
+            let mut open = self.config.show_equalizer;
+            egui::Window::new("Equalizer")
+                .id(egui::Id::new("equalizer_window"))
+                .open(&mut open)
+                .resizable(false)
+                .collapsible(true)
+                .default_pos([left, top + 200.0])
+                .constrain_to(desktop)
+                .show(ctx, |ui| self.show_equalizer(ui));
+            self.config.show_equalizer = open;
 
-        let mut open = self.config.show_playlist;
-        egui::Window::new("Playlist")
-            .id(egui::Id::new("playlist_window"))
-            .open(&mut open)
-            .resizable(true)
-            .default_pos([left, top + 500.0])
-            // Window frame included, so it lines up with the fixed-width stack above.
-            .default_size([STACK_WIDTH + 14.0, 220.0])
-            .min_size([320.0, 120.0])
-            .constrain_to(desktop)
-            .show(ctx, |ui| self.show_playlist_view(ui, ctx));
-        self.config.show_playlist = open;
+            let mut open = self.config.show_playlist;
+            egui::Window::new("Playlist")
+                .id(egui::Id::new("playlist_window"))
+                .open(&mut open)
+                .resizable(true)
+                .default_pos([left, top + 500.0])
+                // Window frame included, so it lines up with the fixed-width stack above.
+                .default_size([STACK_WIDTH + 14.0, 220.0])
+                .min_size([320.0, 120.0])
+                .constrain_to(desktop)
+                .show(ctx, |ui| self.show_playlist_view(ui, ctx));
+            self.config.show_playlist = open;
+        }
 
         let mut open = self.config.show_library;
         egui::Window::new("Media Library")

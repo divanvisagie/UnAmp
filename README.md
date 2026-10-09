@@ -19,7 +19,9 @@ New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.
   menu or the player's EQ / PL / ML buttons. Layout is remembered; Windows → Reset layout restores it
   ([ADR-0006](docs/adr/0006-floating-egui-windows.md))
 - Skins: stock egui by default, or pick **Steam Classic** (the old olive-green Steam client) from
-  the Skins menu; write your own in TOML ([ADR-0008](docs/adr/0008-toml-skins.md))
+  the Skins menu; write your own in TOML ([ADR-0008](docs/adr/0008-toml-skins.md)), or drop in a
+  classic Winamp `.wsz` and get its windows drawn from its own bitmaps
+  ([ADR-0010](docs/adr/0010-classic-wsz-renderer.md))
 - 10-band graphic equalizer (60 Hz – 16 kHz) with preamp, presets and a live response curve;
   double-click a slider to zero it ([ADR-0007](docs/adr/0007-biquad-equalizer-in-source-chain.md))
 - Media Library: folder browser whose sidebar lists mounted drives, ZFS pools and network shares (NFS/SMB/sshfs/GVfs)
@@ -56,6 +58,20 @@ A skin is one TOML file. Copy [`skins/steam-classic.toml`](skins/steam-classic.t
 documents every key, into `~/.config/unamp/skins/`, change its `name` and colours, then use
 **Skins → Reload skins**. Any colour you leave out keeps egui's default. Typos and bad colours are
 reported in the Skins menu.
+
+### Classic Winamp skins
+
+Got an old `.wsz`? Drop it into `~/.config/unamp/skins/` and choose **Skins → Reload skins**.
+UnAmp converts it to a `.toml` of the same name and lists it in the menu. Pick it, and the Player,
+Equalizer and Playlist are drawn from the skin's own bitmaps, at Winamp's layout and double size:
+title bars, sprite buttons, LED digits, pixel-font ticker, sliders and all
+([ADR-0010](docs/adr/0010-classic-wsz-renderer.md)). The Media Library and menus take on the skin's
+colours.
+
+The `.toml` is yours to tweak and won't be regenerated unless you delete it. Remove its
+`classic = …` line to keep the skin's colours on UnAmp's regular windows instead.
+
+Find thousands of skins at the [Winamp Skin Museum](https://skins.webamp.org).
 
 ```toml
 name = "My Skin"

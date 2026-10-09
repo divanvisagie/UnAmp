@@ -79,6 +79,11 @@ impl Visualizer {
         }
     }
 
+    /// Current bar heights and peak positions, 0–1, for other renderers.
+    pub fn levels(&self) -> (&[f32; BANDS], &[f32; BANDS]) {
+        (&self.bars, &self.peaks)
+    }
+
     /// Whether anything is still moving (so the caller keeps repainting).
     pub fn is_animating(&self) -> bool {
         self.peaks.iter().any(|&p| p > 0.001)
