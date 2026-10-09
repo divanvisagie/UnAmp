@@ -37,7 +37,7 @@ New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.
 - Reads tags (title, artist, album, track number, duration, bitrate) for the folder you're viewing
 - Album art from embedded covers, or `cover`/`folder`/`front`/`album` images beside the tracks
 - Playlist: double-click a track in the library to play its folder from there, or right-click to
-  add tracks or whole folders to the playlist
+  add tracks or whole folders to the playlist. Drag rows to reorder the playlist or the queue
 - Up-next queue: right-click any track for **Play next** or **Add to queue**. Queued tracks play
   before the playlist carries on from where it was, show as `[1]`, `[2]` in the playlist (classic
   skins too), and Previous walks back through everything you heard

@@ -127,6 +127,35 @@ impl Playlist {
         };
     }
 
+    /// Moves playlist entry `from` so it ends up at index `to`. The current
+    /// position and Previous history keep pointing at the same tracks.
+    pub fn move_track(&mut self, from: usize, to: usize) {
+        self.touch();
+        let len = self.tracks.len();
+        if from >= len || to >= len || from == to {
+            return;
+        }
+        let track = self.tracks.remove(from);
+        self.tracks.insert(to, track);
+        let remap = |i: usize| moved_index(i, from, to);
+        self.current = self.current.map(remap);
+        for p in &mut self.history {
+            if let Played::Index(i) = p {
+                *i = remap(*i);
+            }
+        }
+    }
+
+    /// Moves queue entry `from` so it ends up at index `to`.
+    pub fn move_in_queue(&mut self, from: usize, to: usize) {
+        self.touch();
+        if from < self.queue.len() && to < self.queue.len() && from != to {
+            if let Some(track) = self.queue.remove(from) {
+                self.queue.insert(to, track);
+            }
+        }
+    }
+
     /// The playlist track at `current`, whether or not it's what's playing.
     pub fn current_track(&self) -> Option<&Track> {
         self.tracks.get(self.current?)
@@ -271,6 +300,25 @@ impl Playlist {
         self.current = Some(prev);
         self.tracks.get(prev)
     }
+}
+
+/// Where index `i` ends up after the item at `from` moves to `to`.
+fn moved_index(i: usize, from: usize, to: usize) -> usize {
+    if i == from {
+        to
+    } else if from < to && i > from && i <= to {
+        i - 1
+    } else if from > to && i >= to && i < from {
+        i + 1
+    } else {
+        i
+    }
+}
+
+/// Converts a drop position — the gap before row `gap`, from 0 to len — into
+/// the final index of the row being dragged from `from`.
+pub fn drop_index(from: usize, gap: usize) -> usize {
+    if gap > from { gap - 1 } else { gap }
 }
 
 /// Tiny xorshift generator — shuffle doesn't need a crypto-grade dependency.
@@ -474,6 +522,54 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(p.current, None);
+    }
+
+    fn names(p: &Playlist) -> Vec<String> {
+        p.tracks().iter().map(|t| t.name.clone()).collect()
+    }
+
+    #[test]
+    fn moving_a_track_keeps_current_on_the_same_track() {
+        let mut p = playlist(5);
+        p.jump(3);
+        p.move_track(0, 4); // 1 2 3 4 0
+        assert_eq!(names(&p), ["1", "2", "3", "4", "0"]);
+        assert_eq!(p.current_track().unwrap().name, "3");
+        p.move_track(4, 0); // 0 1 2 3 4
+        assert_eq!(p.current_track().unwrap().name, "3");
+        p.move_track(3, 1); // 0 3 1 2 4: the current track itself moves
+        assert_eq!(names(&p), ["0", "3", "1", "2", "4"]);
+        assert_eq!(p.current, Some(1));
+        assert_eq!(p.current_track().unwrap().name, "3");
+    }
+
+    #[test]
+    fn moving_keeps_previous_history_on_the_same_tracks() {
+        let mut p = playlist(4);
+        p.jump(2);
+        p.jump(3); // history: 0, 2
+        p.move_track(0, 3); // 1 2 3 0
+        assert_eq!(p.back().unwrap().name, "2");
+        assert_eq!(p.back().unwrap().name, "0");
+    }
+
+    #[test]
+    fn queue_entries_can_be_reordered() {
+        let mut p = playlist(1);
+        p.add_to_queue([track("a"), track("b"), track("c")]);
+        p.move_in_queue(2, 0);
+        let order: Vec<_> = p.queue().iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(order, ["c", "a", "b"]);
+    }
+
+    #[test]
+    fn drop_gaps_map_to_final_indices() {
+        // Dragging row 1 of 4: dropping in gap 0 puts it first, gaps 1 and 2
+        // leave it where it is, gap 4 (after the last row) puts it last.
+        assert_eq!(drop_index(1, 0), 0);
+        assert_eq!(drop_index(1, 1), 1);
+        assert_eq!(drop_index(1, 2), 1);
+        assert_eq!(drop_index(1, 4), 3);
     }
 
     #[test]

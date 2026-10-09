@@ -7,7 +7,7 @@ use crate::library::{self, Library, Track, TrackAction};
 use crate::metadata::{self, TrackInfo};
 use crate::player::{Engine, PlayState};
 use crate::mpris::{self, Mpris};
-use crate::playlist::Playlist;
+use crate::playlist::{self, Playlist};
 use crate::session;
 use crate::classic::{self, ClassicSkin};
 use crate::skin::{self, Palette, Skin};
@@ -61,6 +61,8 @@ pub struct UnAmpApp {
     art_generation: u64,
     art_tx: mpsc::Sender<NowPlayingResult>,
     art_rx: mpsc::Receiver<NowPlayingResult>,
+    /// Drag-to-reorder state shared by the playlist and up-next lists.
+    reorder: Reorder,
     /// Seek-bar position while the handle is being dragged.
     seek_drag: Option<f32>,
     window_title: String,
@@ -108,6 +110,7 @@ impl UnAmpApp {
             art_generation: 0,
             art_tx,
             art_rx,
+            reorder: Reorder::default(),
             seek_drag: None,
             window_title: String::new(),
         }
@@ -739,7 +742,7 @@ impl UnAmpApp {
         let mut action: Option<PlaylistAction> = None;
         let playing_index = self.playlist.playing_index();
         let playing = self.engine.state() != PlayState::Stopped;
-        egui::ScrollArea::vertical()
+        let output = egui::ScrollArea::vertical()
             .id_salt("playlist_rows")
             .auto_shrink([false, false])
             .show_rows(ui, library::ROW_HEIGHT, self.playlist.tracks().len(), |ui, range| {
@@ -752,8 +755,10 @@ impl UnAmpApp {
                         &title,
                         track.duration(),
                         playing && playing_index == Some(index),
-                        false,
+                        self.reorder.is_dragging(DragList::Playlist, index),
+                        egui::Sense::click_and_drag(),
                     );
+                    self.reorder.row(ui, DragList::Playlist, index, &resp);
                     if resp.double_clicked() {
                         action = Some(PlaylistAction::Play(index));
                     }
@@ -772,7 +777,11 @@ impl UnAmpApp {
                         }
                     });
                 }
+                self.reorder.autoscroll(ui, DragList::Playlist);
             });
+        if let Some((from, to)) = self.reorder.finish(ui, DragList::Playlist, output.inner_rect) {
+            self.playlist.move_track(from, to);
+        }
         if let Some(action) = action {
             self.apply_playlist_action(action, ctx);
         }
@@ -797,14 +806,24 @@ impl UnAmpApp {
         }
         let mut action = None;
         let rows = self.playlist.queue().len();
-        egui::ScrollArea::vertical()
+        let output = egui::ScrollArea::vertical()
             .id_salt("up_next_rows")
             .max_height(library::ROW_HEIGHT * 5.0)
             .auto_shrink([false, true])
             .show_rows(ui, library::ROW_HEIGHT, rows, |ui, range| {
                 for index in range {
                     let track = &self.playlist.queue()[index];
-                    let resp = library::track_row(ui, index, &track.title(), track.duration(), false, false);
+                    let dragging = self.reorder.is_dragging(DragList::Queue, index);
+                    let resp = library::track_row(
+                        ui,
+                        index,
+                        &track.title(),
+                        track.duration(),
+                        false,
+                        dragging,
+                        egui::Sense::click_and_drag(),
+                    );
+                    self.reorder.row(ui, DragList::Queue, index, &resp);
                     if resp.double_clicked() {
                         action = Some(QueueAction::PlayNow(index));
                     }
@@ -820,7 +839,11 @@ impl UnAmpApp {
                         }
                     });
                 }
+                self.reorder.autoscroll(ui, DragList::Queue);
             });
+        if let Some((from, to)) = self.reorder.finish(ui, DragList::Queue, output.inner_rect) {
+            self.playlist.move_in_queue(from, to);
+        }
 
         match action {
             Some(QueueAction::PlayNow(index)) => {
@@ -860,6 +883,87 @@ impl UnAmpApp {
                 }
             }
         }
+    }
+}
+
+/// Which list a row drag belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DragList {
+    Playlist,
+    Queue,
+}
+
+/// Drag-to-reorder for rows drawn with `ScrollArea::show_rows`: call `row`
+/// for each row, `autoscroll` at the end of the scroll area's closure, and
+/// `finish` after it, which draws the drop line and returns the move once
+/// the pointer is released.
+#[derive(Default)]
+struct Reorder {
+    /// The list and row being dragged.
+    dragging: Option<(DragList, usize)>,
+    /// The gap under the pointer this frame (0..=len) and its y position.
+    gap: Option<(usize, f32)>,
+}
+
+impl Reorder {
+    fn is_dragging(&self, list: DragList, index: usize) -> bool {
+        self.dragging == Some((list, index))
+    }
+
+    fn row(&mut self, ui: &egui::Ui, list: DragList, index: usize, resp: &egui::Response) {
+        if resp.drag_started() {
+            self.dragging = Some((list, index));
+        }
+        if self.dragging.is_some_and(|(l, _)| l == list) {
+            if let Some(p) = ui.input(|i| i.pointer.interact_pos()) {
+                if resp.rect.y_range().contains(p.y) {
+                    let below = p.y > resp.rect.center().y;
+                    let (gap, y) = if below { (index + 1, resp.rect.bottom()) } else { (index, resp.rect.top()) };
+                    self.gap = Some((gap, y));
+                }
+            }
+        }
+    }
+
+    /// Scrolls the list while a row is dragged near its top or bottom edge.
+    fn autoscroll(&self, ui: &egui::Ui, list: DragList) {
+        if !self.dragging.is_some_and(|(l, _)| l == list) {
+            return;
+        }
+        let Some(p) = ui.input(|i| i.pointer.interact_pos()) else {
+            return;
+        };
+        let clip = ui.clip_rect();
+        let edge = library::ROW_HEIGHT;
+        let speed = if p.y < clip.top() + edge {
+            6.0
+        } else if p.y > clip.bottom() - edge {
+            -6.0
+        } else {
+            return;
+        };
+        ui.scroll_with_delta(egui::vec2(0.0, speed));
+        ui.ctx().request_repaint();
+    }
+
+    fn finish(&mut self, ui: &egui::Ui, list: DragList, area: egui::Rect) -> Option<(usize, usize)> {
+        let (l, from) = self.dragging?;
+        if l != list {
+            return None;
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        let gap = self.gap.take();
+        if let Some((_, y)) = gap {
+            let stroke = egui::Stroke::new(2.0, ui.visuals().selection.bg_fill);
+            ui.painter().with_clip_rect(area.expand(2.0)).hline(area.x_range(), y, stroke);
+        }
+        if ui.input(|i| !i.pointer.any_down()) {
+            self.dragging = None;
+            let (gap, _) = gap?;
+            let to = playlist::drop_index(from, gap);
+            return (to != from).then_some((from, to));
+        }
+        None
     }
 }
 
@@ -1601,6 +1705,86 @@ mod tests {
         assert_eq!(effective_volume(&muted), 0.0);
         assert_eq!(muted.volume, 0.7);
         assert_eq!(effective_volume(&config(0.7, false)), 0.7);
+    }
+
+    /// Runs one headless egui frame of a 5-row draggable list, returning
+    /// each row's rect and the move `finish` reported, if any.
+    fn drag_frame(
+        ctx: &egui::Context,
+        reorder: &mut Reorder,
+        events: Vec<egui::Event>,
+        time: f64,
+    ) -> (Vec<egui::Rect>, Option<(usize, usize)>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        let (mut rects, mut moved) = (Vec::new(), None);
+        let _ = ctx.run_ui(input, |ui| {
+            let output = egui::ScrollArea::vertical().show_rows(ui, library::ROW_HEIGHT, 5, |ui, range| {
+                for i in range {
+                    let resp = library::track_row(ui, i, "track", None, false, false, egui::Sense::click_and_drag());
+                    reorder.row(ui, DragList::Playlist, i, &resp);
+                    rects.push(resp.rect);
+                }
+            });
+            moved = reorder.finish(ui, DragList::Playlist, output.inner_rect);
+        });
+        (rects, moved)
+    }
+
+    #[test]
+    fn dragging_a_row_and_releasing_reports_the_move() {
+        let ctx = egui::Context::default();
+        let mut reorder = Reorder::default();
+        let (rects, _) = drag_frame(&ctx, &mut reorder, vec![], 0.0);
+        let grab = rects[0].center();
+        // Lower half of row 2: the gap after it, so row 0 lands at index 2.
+        let drop = egui::pos2(grab.x, rects[2].center().y + 4.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+
+        let steps = [
+            vec![egui::Event::PointerMoved(grab), button(grab, true)],
+            vec![egui::Event::PointerMoved(grab + egui::vec2(0.0, 10.0))],
+            vec![egui::Event::PointerMoved(rects[1].center())],
+            vec![egui::Event::PointerMoved(drop)],
+            vec![egui::Event::PointerMoved(drop)],
+            vec![button(drop, false)],
+        ];
+        let mut moved = None;
+        for (i, events) in steps.into_iter().enumerate() {
+            let (_, m) = drag_frame(&ctx, &mut reorder, events, 0.1 * (i + 1) as f64);
+            moved = moved.or(m);
+        }
+        assert_eq!(moved, Some((0, 2)));
+        assert!(reorder.dragging.is_none(), "drag ends on release");
+    }
+
+    #[test]
+    fn a_plain_click_is_not_a_move() {
+        let ctx = egui::Context::default();
+        let mut reorder = Reorder::default();
+        let (rects, _) = drag_frame(&ctx, &mut reorder, vec![], 0.0);
+        let at = rects[1].center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        let mut moved = None;
+        for (i, events) in [vec![egui::Event::PointerMoved(at), button(true)], vec![button(false)]].into_iter().enumerate() {
+            let (_, m) = drag_frame(&ctx, &mut reorder, events, 0.1 * (i + 1) as f64);
+            moved = moved.or(m);
+        }
+        assert_eq!(moved, None);
     }
 
     #[test]

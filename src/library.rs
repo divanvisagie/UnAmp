@@ -432,6 +432,7 @@ impl Library {
                         track.duration(),
                         playing == Some(track.path.as_path()),
                         *selected == Some(index),
+                        egui::Sense::click(),
                     );
                     if resp.double_clicked() {
                         action = Some(TrackAction::Play(index));
@@ -493,9 +494,10 @@ pub fn track_row(
     duration: Option<std::time::Duration>,
     is_playing: bool,
     is_selected: bool,
+    sense: egui::Sense,
 ) -> egui::Response {
     let width = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), sense);
     let visuals = ui.visuals();
     let painter = ui.painter_at(rect);
 
