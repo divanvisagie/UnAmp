@@ -31,6 +31,8 @@ pub struct AppConfig {
     pub window_height: Option<f32>,
     pub browse_path: Option<PathBuf>,
     pub volume: f32,
+    /// Silenced without losing `volume`; unmuting restores it.
+    pub muted: bool,
     pub shuffle: bool,
     pub repeat: Repeat,
     /// Show the time display as time remaining instead of elapsed.
@@ -56,6 +58,7 @@ impl Default for AppConfig {
             window_height: None,
             browse_path: None,
             volume: 0.8,
+            muted: false,
             shuffle: false,
             repeat: Repeat::Off,
             show_remaining: false,

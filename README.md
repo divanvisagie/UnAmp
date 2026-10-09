@@ -66,6 +66,7 @@ The classic bottom row, with nothing focused:
 | `V` | Stop |
 | `B` | Next |
 | `←` / `→` | Seek 5 s |
+| `M` | Mute / unmute (or click the speaker) |
 | `Ctrl+F` | Search the Media Library |
 
 ## Skins

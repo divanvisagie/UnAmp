@@ -74,7 +74,7 @@ impl UnAmpApp {
             .unwrap_or_default();
         let saved_revision = playlist.revision();
         let eq = EqParams::new(config.eq_enabled, config.eq_preamp, config.eq_bands);
-        let engine = Engine::new(config.volume, Arc::clone(&eq));
+        let engine = Engine::new(effective_volume(&config), Arc::clone(&eq));
         let visualizer = Visualizer::new(engine.tap());
         let (art_tx, art_rx) = mpsc::channel();
         let (skins, mut skin_errors) = skin::load_all();
@@ -205,6 +205,16 @@ impl UnAmpApp {
         }
     }
 
+    fn toggle_mute(&mut self) {
+        self.config.muted = !self.config.muted;
+        self.apply_volume();
+    }
+
+    /// Sends the volume to the engine, as silence while muted.
+    fn apply_volume(&self) {
+        self.engine.set_volume(effective_volume(&self.config));
+    }
+
     fn handle_keys(&mut self, ctx: &egui::Context) {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
             self.config.show_library = true;
@@ -229,6 +239,9 @@ impl UnAmpApp {
         }
         if pressed(egui::Key::B) {
             self.next(false, ctx);
+        }
+        if pressed(egui::Key::M) {
+            self.toggle_mute();
         }
         if pressed(egui::Key::ArrowRight) {
             self.engine.seek(self.engine.position() + SEEK_STEP);
@@ -495,16 +508,30 @@ impl UnAmpApp {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().slider_width = 90.0;
+                // Muted shows as 0; the level underneath is kept for unmuting.
+                let mut shown = effective_volume(&self.config);
                 let resp = ui.add(
-                    egui::Slider::new(&mut self.config.volume, 0.0..=1.0)
+                    egui::Slider::new(&mut shown, 0.0..=1.0)
                         .show_value(false)
                         .trailing_fill(true),
                 );
                 if resp.changed() {
-                    self.engine.set_volume(self.config.volume);
+                    // Moving the slider means you want to hear it, at that level.
+                    self.config.volume = shown;
+                    self.config.muted = false;
+                    self.apply_volume();
                 }
-                resp.on_hover_text(format!("Volume {:.0}%", self.config.volume * 100.0));
-                ui.label(if self.config.volume == 0.0 { "\u{1F507}" } else { "\u{1F50A}" });
+                resp.on_hover_text(if self.config.muted {
+                    format!("Muted (unmutes to {:.0}%)", self.config.volume * 100.0)
+                } else {
+                    format!("Volume {:.0}%", self.config.volume * 100.0)
+                });
+                let speaker = ui
+                    .add(egui::Button::new(speaker_icon(&self.config)).frame(false))
+                    .on_hover_text(if self.config.muted { "Unmute (M)" } else { "Mute (M)" });
+                if speaker.clicked() {
+                    self.toggle_mute();
+                }
             });
         });
     }
@@ -877,7 +904,7 @@ impl UnAmpApp {
             kbps: info.and_then(|i| i.bitrate_kbps),
             khz: info.and_then(|i| i.sample_rate).map(|r| r / 1000),
             channels: info.and_then(|i| i.channels),
-            volume: self.config.volume,
+            volume: effective_volume(&self.config),
             shuffle: self.config.shuffle,
             repeat: self.config.repeat,
             show_remaining: self.config.show_remaining,
@@ -937,7 +964,8 @@ impl UnAmpApp {
                 }
                 classic::Action::Volume(v) => {
                     self.config.volume = v;
-                    self.engine.set_volume(v);
+                    self.config.muted = false;
+                    self.apply_volume();
                 }
                 classic::Action::ToggleShuffle => self.config.shuffle = !self.config.shuffle,
                 classic::Action::CycleRepeat => self.config.repeat = self.config.repeat.next(),
@@ -1066,7 +1094,7 @@ impl UnAmpApp {
             album: info.and_then(|i| i.album.clone()).filter(|_| current.is_some()),
             length_us: self.engine.duration().filter(|_| current.is_some()).map(|d| d.as_micros() as i64),
             art_url: self.art_url.clone().filter(|_| current.is_some()),
-            volume: self.config.volume as f64,
+            volume: effective_volume(&self.config) as f64,
             shuffle: self.config.shuffle,
             repeat: self.config.repeat,
             can_go_next: has_lists,
@@ -1122,7 +1150,8 @@ impl UnAmpApp {
             C::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             C::SetVolume(volume) => {
                 self.config.volume = volume as f32;
-                self.engine.set_volume(self.config.volume);
+                self.config.muted = false;
+                self.apply_volume();
             }
             C::SetShuffle(on) => self.config.shuffle = on,
             C::SetRepeat(repeat) => self.config.repeat = repeat,
@@ -1338,6 +1367,22 @@ fn load_classic(skin: &Skin, ctx: &egui::Context, errors: &mut Vec<String>) -> O
     }
 }
 
+/// The volume the engine should play at: nothing while muted.
+fn effective_volume(config: &AppConfig) -> f32 {
+    if config.muted { 0.0 } else { config.volume }
+}
+
+/// Speaker icon for the mute button: crossed out when muted (or at zero),
+/// else one, two or three waves by level.
+fn speaker_icon(config: &AppConfig) -> &'static str {
+    match effective_volume(config) {
+        v if v <= 0.0 => "\u{1F507}",
+        v if v < 0.34 => "\u{1F508}",
+        v if v < 0.67 => "\u{1F509}",
+        _ => "\u{1F50A}",
+    }
+}
+
 fn version_label() -> String {
     format!("UnAmp v{}", env!("CARGO_PKG_VERSION"))
 }
@@ -1541,3 +1586,29 @@ impl eframe::App for UnAmpApp {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(volume: f32, muted: bool) -> AppConfig {
+        AppConfig { volume, muted, ..Default::default() }
+    }
+
+    #[test]
+    fn muting_silences_without_losing_the_level() {
+        let muted = config(0.7, true);
+        assert_eq!(effective_volume(&muted), 0.0);
+        assert_eq!(muted.volume, 0.7);
+        assert_eq!(effective_volume(&config(0.7, false)), 0.7);
+    }
+
+    #[test]
+    fn speaker_icon_follows_mute_and_level() {
+        assert_eq!(speaker_icon(&config(0.9, true)), "\u{1F507}");
+        assert_eq!(speaker_icon(&config(0.0, false)), "\u{1F507}");
+        assert_eq!(speaker_icon(&config(0.2, false)), "\u{1F508}");
+        assert_eq!(speaker_icon(&config(0.5, false)), "\u{1F509}");
+        assert_eq!(speaker_icon(&config(0.9, false)), "\u{1F50A}");
+    }
+}

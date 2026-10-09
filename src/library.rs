@@ -255,6 +255,9 @@ impl Library {
 
     /// Renders the left-hand sidebar: locations, path bar, subfolders.
     pub fn show_sidebar(&mut self, ui: &mut egui::Ui) {
+        // Long folder or share names are cut short with "…" (the full path
+        // is on hover) instead of widening the window over its neighbours.
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
         let mut nav_to: Option<PathBuf> = None;
         // A clicked location becomes the tree's root, even if it's inside another.
         let mut new_root: Option<(PathBuf, String)> = None;
