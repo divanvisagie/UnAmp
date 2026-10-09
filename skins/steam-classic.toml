@@ -1,0 +1,40 @@
+# Steam Classic — the olive-green VGUI look of the 2003–2008 Steam client.
+#
+# This file doubles as the reference for the skin format. Copy it to
+# ~/.config/unamp/skins/<anything>.toml, change `name`, and pick it from the
+# Skins menu. Every colour is optional: anything left out keeps egui's
+# default for the `base` theme. Colours are "#RRGGBB" or "#RRGGBBAA".
+
+name = "Steam Classic"
+author = "UnAmp"
+# Which egui theme the skin starts from: "dark" or "light".
+base = "dark"
+# Corner rounding in pixels for windows, menus and widgets (VGUI was square).
+corner_radius = 0
+# Drop shadows under windows and popups.
+shadows = false
+
+[colors]
+background = "#4C5844"   # windows and panels
+surface = "#3E4637"      # inset areas: text fields, lists, scroll tracks
+stripe = "#465040"       # alternate rows in track lists
+border = "#889180"       # window and widget outlines
+text = "#D8DED3"
+text_strong = "#FFFFFF"  # headings, hovered/pressed widget text
+text_weak = "#A0AA95"
+accent = "#958831"       # selection, slider fill, toggles that are on
+accent_text = "#FFFFFF"  # text on top of `accent`
+button = "#4C5844"
+button_hover = "#5A6A50"
+button_active = "#3E4637"
+link = "#C4B550"         # links and the now-playing track
+error = "#E06C4C"
+
+[player]
+display = "#2A3125"      # spectrum analyzer and seek-bar background
+time = "#C4B550"         # the big time display
+title = "#D8DED3"        # scrolling song title
+spectrum_low = "#8BA36A"
+spectrum_mid = "#C4B550"
+spectrum_high = "#D9763E"
+spectrum_peak = "#D8DED3"

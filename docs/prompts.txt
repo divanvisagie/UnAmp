@@ -1,0 +1,28 @@
+Prompts sent in the UnAmp (née LinAmp) session — 2026-10-09
+Total: 11, the last being the one that committed this file. Text is verbatim.
+"(mid-turn)" means it was sent while Claude was still working on the previous one.
+
+1. lets create LinAmp in egui just like photograph, but use the base egui style. Its a music player, it can point to a folder or a network mount and play misic, display album art and i mean... you can guess where we are going with the name
+
+2. (mid-turn) also take the whole ADR concept
+
+3. rename it UnAmp as in Unix
+
+4. we should use windows in egui for media library ,playlist , player, equaliser
+
+5. continue
+
+6. what the heck is .ron?
+
+7. lol, interesting, lets support skins and make the first skin look like the old green steam client
+
+8. (mid-turn) theme should be in a toml file
+
+9. (mid-turn) it will default to the egui one but you can select steam classic
+
+10. how many prompts have i sent you ? can you list them all in the home directory in a text file
+
+11. holy cow... you generated all hat from ten prompts. this is pivotal, put that file in the docs folder and commit it along with everything else and make sure the commit message shows just how crazy this is, in ten short prompts we got to this stage, maybe take the latest screenshot from pictures/Screenshots as well and point to it, this is wild
+
+To see where those ten prompts got to, check out the commit that added this file and build it:
+cargo run --release

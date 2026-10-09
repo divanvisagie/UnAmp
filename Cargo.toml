@@ -1,0 +1,27 @@
+[package]
+name = "unamp"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-2.0-only"
+description = "Native desktop music player for local folders and network shares, with album art and a spectrum analyzer"
+repository = "https://github.com/divanvisagie/UnAmp"
+homepage = "https://github.com/divanvisagie/UnAmp"
+readme = "README.md"
+keywords = ["music", "player", "audio", "egui", "winamp"]
+categories = ["multimedia::audio"]
+exclude = ["docs/", "target/", "Makefile", ".claude/"]
+
+[dependencies]
+anyhow = "1.0.104"
+dirs = "7.0.0"
+eframe = { version = "0.35", features = ["persistence"] }
+egui = "0.35"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
+lofty = "0.25.4"
+rodio = { version = "0.22.2", features = ["symphonia-all"] }
+rustfft = "6.4.1"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
+
+[profile.release]
+opt-level = 3

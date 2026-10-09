@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=UnAmp
+GenericName=Music Player
+Comment=Play music from local folders and network shares
+Exec=unamp
+Icon=unamp
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupNotify=true
+StartupWMClass=unamp
+X-GNOME-WMClass=unamp
