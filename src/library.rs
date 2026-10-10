@@ -152,6 +152,10 @@ impl Library {
     }
 
     fn scan_locations(&mut self) {
+        // Screenshots for the docs shouldn't show the user's drives and shares.
+        if crate::screenshot::requested().is_some() {
+            return;
+        }
         let home = dirs::home_dir();
         let (storage, mut network) = locations::mounted_locations(home.as_deref());
         network.extend(locations::gvfs_locations());

@@ -13,6 +13,7 @@ use crate::mpris::{self, Mpris};
 use crate::command::{Command, PlaylistAction, Window, with_queue_marker};
 use crate::playlist::Playlist;
 use crate::reorder::{DragList, Reorder};
+use crate::screenshot::{self, Screenshot};
 use crate::session;
 use crate::classic::{self, ClassicSkin};
 use crate::skin::{self, Palette, Skin};
@@ -67,6 +68,8 @@ pub struct UnAmpApp {
     /// Bumped per started track; MPRIS identifies tracks by it.
     track_serial: u64,
     mpris: Mpris,
+    /// Set in screenshot mode (`make screenshot`).
+    screenshot: Option<Screenshot>,
     art_generation: u64,
     art_tx: mpsc::Sender<NowPlayingResult>,
     art_rx: mpsc::Receiver<NowPlayingResult>,
@@ -95,6 +98,7 @@ impl UnAmpApp {
             .cloned()
             .unwrap_or_else(Skin::default_skin);
         let palette = current.apply(&cc.egui_ctx);
+        let screenshot = Screenshot::from_env();
         appearance::watch(&cc.egui_ctx);
         let classic = load_classic(&current, &cc.egui_ctx, &mut skin_errors);
         Self {
@@ -117,7 +121,8 @@ impl UnAmpApp {
             art: None,
             art_url: None,
             track_serial: 0,
-            mpris: Mpris::start(&cc.egui_ctx),
+            mpris: Mpris::start(&cc.egui_ctx, screenshot.is_none()),
+            screenshot,
             art_generation: 0,
             art_tx,
             art_rx,
@@ -1238,15 +1243,37 @@ impl UnAmpApp {
         if self.frame_theme == Some(theme) {
             return;
         }
-        if self.frame_theme.is_some() {
-            let current = self.skins.iter().find(|s| s.name == self.config.skin).cloned();
-            self.palette = current.unwrap_or_else(Skin::default_skin).apply(ctx);
-        }
+        // Also on the first frame: the desktop's setting may have arrived
+        // after the palette was first built.
+        let current = self.skins.iter().find(|s| s.name == self.config.skin).cloned();
+        self.palette = current.unwrap_or_else(Skin::default_skin).apply(ctx);
         self.frame_theme = Some(theme);
         ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(match theme {
             egui::Theme::Dark => egui::SystemTheme::Dark,
             egui::Theme::Light => egui::SystemTheme::Light,
         }));
+    }
+
+    /// Drives screenshot mode: play, wait, capture, quit.
+    fn take_screenshot(&mut self, ctx: &egui::Context) {
+        let Some(shot) = self.screenshot.as_mut() else {
+            return;
+        };
+        match shot.step(ctx) {
+            screenshot::Step::Play => {
+                self.apply(Command::Play, ctx);
+                // Silent, while the volume slider still shows the saved level.
+                self.engine.set_volume(0.0);
+            }
+            screenshot::Step::Wait => {}
+            screenshot::Step::Done(result) => {
+                match result {
+                    Ok(path) => eprintln!("unamp: saved screenshot to {}", path.display()),
+                    Err(e) => eprintln!("unamp: screenshot failed: {e}"),
+                }
+                self.apply(Command::Quit, ctx);
+            }
+        }
     }
 
     fn show_equalizer(&mut self, ui: &mut egui::Ui) {
@@ -1424,6 +1451,7 @@ impl eframe::App for UnAmpApp {
         let (state, position) = self.mpris_state();
         self.mpris.update(state, position);
         self.save_session();
+        self.take_screenshot(ctx);
         if self.engine.state() == PlayState::Playing {
             // Keeps logic() running while hidden, to catch the end of a track.
             ctx.request_repaint_after(Duration::from_millis(250));
@@ -1636,6 +1664,9 @@ impl eframe::App for UnAmpApp {
     }
 
     fn on_exit(&mut self) {
+        if self.screenshot.is_some() {
+            return;
+        }
         self.save_session();
         self.config.browse_path = Some(self.library.current_dir.clone());
         self.config.save();

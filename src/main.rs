@@ -13,6 +13,7 @@ mod mpris;
 mod player;
 mod playlist;
 mod reorder;
+mod screenshot;
 mod search;
 mod session;
 mod skin;

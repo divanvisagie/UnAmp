@@ -376,8 +376,9 @@ pub struct Mpris {
 
 impl Mpris {
     /// Starts the D-Bus thread. Never fails: without a session bus the
-    /// thread just ends and the handle's sends go nowhere.
-    pub fn start(ctx: &egui::Context) -> Self {
+    /// thread just ends and the handle's sends go nowhere. With `on_bus`
+    /// off it doesn't connect at all (screenshot mode).
+    pub fn start(ctx: &egui::Context, on_bus: bool) -> Self {
         let (updates_tx, updates_rx) = mpsc::channel();
         let (commands_tx, commands_rx) = mpsc::channel();
         let shared = Arc::new(Mutex::new(Shared {
@@ -386,9 +387,11 @@ impl Mpris {
         }));
         let remote = Remote { tx: commands_tx, ctx: ctx.clone() };
         let thread_shared = Arc::clone(&shared);
-        let _ = std::thread::Builder::new()
-            .name("mpris".into())
-            .spawn(move || run(remote, thread_shared, updates_rx));
+        if on_bus {
+            let _ = std::thread::Builder::new()
+                .name("mpris".into())
+                .spawn(move || run(remote, thread_shared, updates_rx));
+        }
         Self {
             updates: updates_tx,
             commands: commands_rx,

@@ -36,7 +36,9 @@ NOTES_FLAG := $(if $(NOTES),--notes-file "$(NOTES)")
 
 .DEFAULT_GOAL := help
 
-.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean-deb clean-icons icons icon-runtime release release-check bump install-desktop uninstall-desktop
+SCREENSHOT := docs/screenshot.png
+
+.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean-deb clean-icons icons icon-runtime release release-check bump install-desktop uninstall-desktop screenshot
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -126,6 +128,24 @@ install-desktop: ## Register a launcher + icon for this checkout's build in ~/.l
 uninstall-desktop: ## Remove what install-desktop added
 	rm -f "$(USER_APPS)/$(APP_NAME).desktop" "$(USER_ICONS)/$(APP_NAME).svg"
 	-update-desktop-database "$(USER_APPS)" >/dev/null 2>&1
+
+# Runs UnAmp against a throwaway home of synthesised songs (see
+# examples/fake_library.rs), so the picture never shows your own music,
+# folders or network shares. The app plays muted, captures its own window
+# and quits; the temporary directory is removed afterwards. Light or dark
+# follows the desktop setting at the time.
+screenshot: ## Regenerate docs/screenshot.png from a temporary library of fake songs
+	cargo build --release --bin $(APP_NAME) --example fake_library
+	@set -e; \
+	tmp="$$(mktemp -d -t unamp-screenshot.XXXXXX)"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	echo "Generating fake library in $$tmp"; \
+	target/release/examples/fake_library "$$tmp"; \
+	HOME="$$tmp/home" XDG_CONFIG_HOME="$$tmp/config" XDG_DATA_HOME="$$tmp/data" XDG_CACHE_HOME="$$tmp/cache" \
+		UNAMP_SCREENSHOT="$$tmp/shot.png" timeout 60 target/release/$(APP_NAME); \
+	test -s "$$tmp/shot.png" || { echo "no screenshot was taken"; exit 1; }; \
+	mv "$$tmp/shot.png" "$(SCREENSHOT)"
+	@echo "Updated $(SCREENSHOT)"
 
 clean-deb: ## Remove built .deb artifacts
 	rm -rf "$(DEB_DIR)"
