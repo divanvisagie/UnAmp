@@ -1,8 +1,10 @@
 //! Folder browsing: the sidebar (locations, path bar, subfolders) and the
 //! current folder's track list, whose tags are read on a worker thread.
 
+use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 
 use crate::locations::{self, Location};
 use crate::metadata::{self, TrackInfo};
@@ -10,6 +12,9 @@ use crate::search::Search;
 use crate::tree::FolderTree;
 
 pub const ROW_HEIGHT: f32 = 22.0;
+/// Only folders with at most this many subfolders get album sections, so
+/// opening a collection's root doesn't list every artist over the network.
+const MAX_ALBUM_FOLDERS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Track {
@@ -51,22 +56,49 @@ pub enum TrackAction {
     AddToQueue(usize),
     /// Append the track to the playlist.
     AddToPlaylist(usize),
+    /// Play just these tracks (an album section).
+    PlayAlbum(Range<usize>),
+    /// Put these tracks at the back of the up-next queue.
+    QueueAlbum(Range<usize>),
+    /// Append these tracks to the playlist.
+    AddAlbumToPlaylist(Range<usize>),
+}
+
+/// A subfolder of the current folder whose tracks are listed under a
+/// header, so an artist folder shows every album at once.
+#[derive(Debug, Clone)]
+pub struct Section {
+    pub dir: PathBuf,
+    pub name: String,
+    /// Where its tracks sit in `Library::tracks`.
+    pub tracks: Range<usize>,
 }
 
 /// Labels shared by every track context menu, so they read the same everywhere.
 pub const PLAY_NEXT: &str = "\u{23ED} Play next";
 pub const ADD_TO_QUEUE: &str = "\u{2795} Add to queue";
 
-struct InfoResult {
-    generation: u64,
-    index: usize,
-    info: TrackInfo,
+enum ScanMsg {
+    /// A subfolder's audio files, appended after what's already listed.
+    Section {
+        generation: u64,
+        dir: PathBuf,
+        name: String,
+        paths: Vec<PathBuf>,
+    },
+    Info {
+        generation: u64,
+        index: usize,
+        info: TrackInfo,
+    },
 }
 
 pub struct Library {
     pub current_dir: PathBuf,
     subdirs: Vec<(PathBuf, String)>,
+    /// The folder's own tracks, then each section's, in display order.
     pub tracks: Vec<Track>,
+    pub sections: Vec<Section>,
     pending_nav: Option<PathBuf>,
     path_edit: String,
     path_error: Option<String>,
@@ -74,14 +106,17 @@ pub struct Library {
     storage_locations: Vec<Location>,
     network_locations: Vec<Location>,
     /// Bumped on every scan so a slow tag reader for the previous folder is ignored.
-    generation: u64,
-    tx: mpsc::Sender<InfoResult>,
-    rx: mpsc::Receiver<InfoResult>,
+    generation: Arc<AtomicU64>,
+    tx: mpsc::Sender<ScanMsg>,
+    rx: mpsc::Receiver<ScanMsg>,
     selected: Option<usize>,
     /// The sidebar tree, rooted at the current location.
     pub tree: FolderTree,
     /// Search under the tree's root; while active it replaces the track list.
     pub search: Search,
+    /// The folder of the search result last clicked, which the tree
+    /// highlights instead of the current folder while searching.
+    search_focus: Option<PathBuf>,
 }
 
 impl Library {
@@ -99,17 +134,19 @@ impl Library {
             current_dir: dir.clone(),
             subdirs: Vec::new(),
             tracks: Vec::new(),
+            sections: Vec::new(),
             pending_nav: None,
             path_error: None,
             scan_error: None,
             storage_locations: Vec::new(),
             network_locations: Vec::new(),
-            generation: 0,
+            generation: Arc::new(AtomicU64::new(0)),
             tx,
             rx,
             selected: None,
             tree: FolderTree::new(dir.clone(), String::new()),
             search: Search::default(),
+            search_focus: None,
         };
         lib.scan_locations();
         let (root, label) = lib.location_for(&lib.current_dir);
@@ -166,9 +203,10 @@ impl Library {
     fn scan(&mut self, ctx: &egui::Context) {
         self.subdirs.clear();
         self.tracks.clear();
+        self.sections.clear();
         self.scan_error = None;
         self.selected = None;
-        self.generation += 1;
+        let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
 
         let rd = match std::fs::read_dir(&self.current_dir) {
             Ok(rd) => rd,
@@ -205,16 +243,41 @@ impl Library {
             .sort_by_key(|(_, name)| name.to_lowercase());
         self.tracks.sort_by_key(|t| t.name.to_lowercase());
 
-        // One sequential reader per folder: gentle on a NAS, and results
-        // stream in top to bottom.
-        let paths: Vec<PathBuf> = self.tracks.iter().map(|t| t.path.clone()).collect();
-        let generation = self.generation;
+        // One sequential worker per folder: gentle on a NAS. It lists the
+        // subfolders first, so the sections settle before tags stream in
+        // top to bottom.
+        let mut paths: Vec<PathBuf> = self.tracks.iter().map(|t| t.path.clone()).collect();
+        let subdirs = if self.subdirs.len() <= MAX_ALBUM_FOLDERS {
+            self.subdirs.clone()
+        } else {
+            Vec::new()
+        };
+        let current = self.generation.clone();
         let tx = self.tx.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
+            let cancelled = || current.load(Ordering::Relaxed) != generation;
+            for (dir, name) in subdirs {
+                if cancelled() {
+                    return;
+                }
+                let found = audio_files(&dir);
+                if found.is_empty() {
+                    continue;
+                }
+                paths.extend(found.iter().cloned());
+                let msg = ScanMsg::Section { generation, dir, name, paths: found };
+                if tx.send(msg).is_err() {
+                    return;
+                }
+                ctx.request_repaint();
+            }
             for (index, path) in paths.iter().enumerate() {
+                if cancelled() {
+                    return;
+                }
                 let info = metadata::read_track_info(path);
-                if tx.send(InfoResult { generation, index, info }).is_err() {
+                if tx.send(ScanMsg::Info { generation, index, info }).is_err() {
                     return;
                 }
                 if index % 8 == 7 {
@@ -232,6 +295,7 @@ impl Library {
     /// Applies pending navigation and incoming tags. Call once per frame.
     pub fn poll(&mut self, ctx: &egui::Context) {
         if let Some(dir) = self.pending_nav.take() {
+            self.search_focus = None;
             self.current_dir = dir;
             self.path_edit = self.current_dir.display().to_string();
             self.path_error = None;
@@ -248,11 +312,21 @@ impl Library {
         self.tree.poll();
         let now = ctx.input(|i| i.time);
         self.search.poll(self.tree.root(), now, ctx);
-        while let Ok(InfoResult { generation, index, info }) = self.rx.try_recv() {
-            if generation == self.generation {
-                if let Some(track) = self.tracks.get_mut(index) {
-                    track.info = Some(info);
+        let current = self.generation.load(Ordering::Relaxed);
+        while let Ok(msg) = self.rx.try_recv() {
+            match msg {
+                ScanMsg::Section { generation, dir, name, paths } if generation == current => {
+                    let start = self.tracks.len();
+                    self.tracks.extend(paths.into_iter().map(Track::new));
+                    let tracks = start..self.tracks.len();
+                    self.sections.push(Section { dir, name, tracks });
                 }
+                ScanMsg::Info { generation, index, info } if generation == current => {
+                    if let Some(track) = self.tracks.get_mut(index) {
+                        track.info = Some(info);
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -357,7 +431,11 @@ impl Library {
 
         ui.add_space(4.0);
         ui.label(egui::RichText::new("FOLDERS").weak().small());
-        if let Some(path) = self.tree.show(ui, &self.current_dir) {
+        let highlight = match &self.search_focus {
+            Some(folder) if self.search.is_active() => folder,
+            _ => &self.current_dir,
+        };
+        if let Some(path) = self.tree.show(ui, highlight) {
             nav_to = Some(path);
         }
 
@@ -397,30 +475,62 @@ impl Library {
 
         let mut action = None;
         let mut open_folder = None;
+        let mut focus = None;
         let list: &[Track] = if searching { &self.search.tracks } else { &self.tracks };
-        // A folder's subfolders come first, so an artist folder with only
-        // albums in it isn't a dead end. (Search shows matching folders above.)
-        let folders: &[(PathBuf, String)] = if searching { &[] } else { &self.subdirs };
+        let rows = if searching {
+            (0..list.len()).map(|index| Row::Track { index, number: index }).collect()
+        } else {
+            folder_rows(&self.subdirs, &self.sections, list.len())
+        };
         let root = self.tree.root();
+        let sections = &self.sections;
         let selected = &mut self.selected;
         egui::ScrollArea::vertical()
             .id_salt(if searching { "search_rows" } else { "folder_rows" })
             .auto_shrink([false, false])
-            .show_rows(ui, ROW_HEIGHT, folders.len() + list.len(), |ui, range| {
-                for row in range {
-                    if let Some((path, name)) = folders.get(row) {
-                        let resp = folder_row(ui, row, name).on_hover_text(path.display().to_string());
-                        if resp.clicked() {
-                            open_folder = Some(path.clone());
-                        }
-                        resp.context_menu(|ui| {
-                            if ui.button("\u{1F4C2} Open").clicked() {
+            .show_rows(ui, ROW_HEIGHT, rows.len(), |ui, range| {
+                for row in &rows[range] {
+                    let (index, number) = match *row {
+                        Row::Folder(i) => {
+                            let (path, name) = &self.subdirs[i];
+                            let resp = folder_row(ui, i, name).on_hover_text(path.display().to_string());
+                            if resp.clicked() {
                                 open_folder = Some(path.clone());
                             }
-                        });
-                        continue;
-                    }
-                    let index = row - folders.len();
+                            resp.context_menu(|ui| {
+                                if ui.button("\u{1F4C2} Open").clicked() {
+                                    open_folder = Some(path.clone());
+                                }
+                            });
+                            continue;
+                        }
+                        Row::Header(s) => {
+                            let section = &sections[s];
+                            let tracks = &list[section.tracks.clone()];
+                            let resp = section_header(ui, &section.name, tracks)
+                                .on_hover_text("Double-click to play this album");
+                            if resp.double_clicked() {
+                                action = Some(TrackAction::PlayAlbum(section.tracks.clone()));
+                            }
+                            resp.context_menu(|ui| {
+                                if ui.button("\u{25B6} Play album").clicked() {
+                                    action = Some(TrackAction::PlayAlbum(section.tracks.clone()));
+                                }
+                                if ui.button(ADD_TO_QUEUE).clicked() {
+                                    action = Some(TrackAction::QueueAlbum(section.tracks.clone()));
+                                }
+                                if ui.button("\u{1F3B6} Add to playlist").clicked() {
+                                    action =
+                                        Some(TrackAction::AddAlbumToPlaylist(section.tracks.clone()));
+                                }
+                                if ui.button("\u{1F4C2} Open folder").clicked() {
+                                    open_folder = Some(section.dir.clone());
+                                }
+                            });
+                            continue;
+                        }
+                        Row::Track { index, number } => (index, number),
+                    };
                     let track = &list[index];
                     // Results come from all over, so show where each one lives.
                     let title = match track.path.parent().and_then(|p| p.strip_prefix(root).ok()) {
@@ -431,7 +541,7 @@ impl Library {
                     };
                     let resp = track_row(
                         ui,
-                        index,
+                        number,
                         &title,
                         track.duration(),
                         playing == Some(track.path.as_path()),
@@ -442,6 +552,9 @@ impl Library {
                         action = Some(TrackAction::Play(index));
                     } else if resp.clicked() {
                         *selected = Some(index);
+                        if searching {
+                            focus = track.path.parent().map(Path::to_path_buf);
+                        }
                     }
                     resp.context_menu(|ui| {
                         if ui.button("\u{25B6} Play").clicked() {
@@ -462,8 +575,107 @@ impl Library {
         if let Some(path) = open_folder {
             self.navigate(path);
         }
+        // Point the tree at a clicked result's folder without leaving the search.
+        if let Some(folder) = focus {
+            self.tree.reveal(&folder);
+            self.search_focus = Some(folder);
+        }
         action
     }
+}
+
+/// One row of the folder view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Row {
+    /// A subfolder, by index into `subdirs`.
+    Folder(usize),
+    /// An album section's header, by index into `sections`.
+    Header(usize),
+    /// A track by index into the list, numbered from 0 within its section.
+    Track { index: usize, number: usize },
+}
+
+/// The folder view, top to bottom: subfolders that aren't albums (nothing
+/// playable directly inside), the folder's own tracks, then each album
+/// under its header.
+fn folder_rows(subdirs: &[(PathBuf, String)], sections: &[Section], track_count: usize) -> Vec<Row> {
+    let mut rows: Vec<Row> = (0..subdirs.len())
+        .filter(|&i| !sections.iter().any(|s| s.dir == subdirs[i].0))
+        .map(Row::Folder)
+        .collect();
+    let loose = sections.first().map_or(track_count, |s| s.tracks.start);
+    rows.extend((0..loose).map(|index| Row::Track { index, number: index }));
+    for (s, section) in sections.iter().enumerate() {
+        rows.push(Row::Header(s));
+        let start = section.tracks.start;
+        rows.extend(section.tracks.clone().map(|index| Row::Track { index, number: index - start }));
+    }
+    rows
+}
+
+/// A folder's audio files, sorted by name like the folder view.
+fn audio_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = rd
+        .flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .filter(|e| !e.file_type().is_ok_and(|ft| ft.is_dir()))
+        .map(|e| e.path())
+        .filter(|p| metadata::is_audio(p))
+        .collect();
+    files.sort_by_key(|p| metadata::file_stem(p).to_lowercase());
+    files
+}
+
+/// An album section's header: the folder name in bold over a rule, with
+/// the track count and total length on the right.
+fn section_header(ui: &mut egui::Ui, name: &str, tracks: &[Track]) -> egui::Response {
+    let width = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), egui::Sense::click());
+    let visuals = ui.visuals();
+    let painter = ui.painter_at(rect);
+    if resp.hovered() {
+        painter.rect_filled(rect, visuals.widgets.inactive.corner_radius, visuals.widgets.hovered.weak_bg_fill);
+    }
+    let y = rect.bottom() - 0.5;
+    painter.line_segment(
+        [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+        visuals.widgets.noninteractive.bg_stroke,
+    );
+    let mut body = egui::TextStyle::Body.resolve(ui.style());
+    body.size += 1.0;
+    let total: std::time::Duration = tracks.iter().filter_map(Track::duration).sum();
+    let summary = match tracks.len() {
+        1 => "1 track".to_string(),
+        n => format!("{n} tracks"),
+    };
+    let summary = if total.is_zero() {
+        summary
+    } else {
+        format!("{summary} · {}", metadata::format_duration(total))
+    };
+    let summary_galley = painter.layout_no_wrap(
+        summary,
+        egui::TextStyle::Small.resolve(ui.style()),
+        visuals.weak_text_color(),
+    );
+    let right = rect.right() - 8.0 - summary_galley.size().x;
+    painter.galley(
+        egui::pos2(right, rect.center().y - summary_galley.size().y / 2.0),
+        summary_galley,
+        visuals.weak_text_color(),
+    );
+    let name_rect = egui::Rect::from_min_max(rect.min, egui::pos2(right - 12.0, rect.bottom()));
+    ui.painter_at(name_rect).text(
+        egui::pos2(rect.left() + 6.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format!("\u{1F4BF} {name}"),
+        body,
+        visuals.strong_text_color(),
+    );
+    resp
 }
 
 /// A subfolder row in the track list: folder icon and name, opened with
@@ -560,4 +772,28 @@ pub fn track_row(
         text_color,
     );
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn albums_follow_loose_tracks_and_replace_their_folder_rows() {
+        let subdirs = vec![
+            (PathBuf::from("/a/Album"), "Album".to_string()),
+            (PathBuf::from("/a/Scans"), "Scans".to_string()),
+        ];
+        let sections = vec![Section { dir: PathBuf::from("/a/Album"), name: "Album".into(), tracks: 1..3 }];
+        assert_eq!(
+            folder_rows(&subdirs, &sections, 3),
+            vec![
+                Row::Folder(1),
+                Row::Track { index: 0, number: 0 },
+                Row::Header(0),
+                Row::Track { index: 1, number: 0 },
+                Row::Track { index: 2, number: 1 },
+            ]
+        );
+    }
 }

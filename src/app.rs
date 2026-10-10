@@ -870,6 +870,21 @@ impl UnAmpApp {
                     self.playlist.append([t]);
                 }
             }
+            Some(TrackAction::PlayAlbum(range)) => {
+                let album = self.library.tracks.get(range).unwrap_or_default().to_vec();
+                self.playlist.replace(album, 0);
+                if let Some(track) = self.playlist.now_playing().cloned() {
+                    self.start_track(track, ctx);
+                }
+            }
+            Some(TrackAction::QueueAlbum(range)) => {
+                let album = self.library.tracks.get(range).unwrap_or_default().to_vec();
+                self.playlist.add_to_queue(album);
+            }
+            Some(TrackAction::AddAlbumToPlaylist(range)) => {
+                let album = self.library.tracks.get(range).unwrap_or_default().to_vec();
+                self.playlist.append(album);
+            }
             None => {}
         }
     }
