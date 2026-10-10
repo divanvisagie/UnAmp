@@ -61,6 +61,7 @@ mechanics of adding one.
 | [0019](0019-follow-desktop-color-scheme.md) | Follow the desktop's light/dark setting through the XDG portal | Accepted |
 | [0020](0020-draw-own-window-frame.md) | Draw UnAmp's own window frame, following the skin | Accepted |
 | [0021](0021-screenshot-mode.md) | Generate the docs screenshot from a fake library, with a screenshot mode in the app | Proposed |
+| [0022](0022-snap-to-grid-and-tiling.md) | Snap floating windows to a grid, or tile them | Accepted |
 
 ## Decision Relationship
 
@@ -97,6 +98,8 @@ flowchart TD
     H --> T
     T --> U[0021: Screenshot mode, fake library]
     P --> U
+    F --> V[0022: Snap to grid, tiling]
+    J --> V
 ```
 
 ## Revisit Triggers

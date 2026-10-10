@@ -6,6 +6,7 @@ mod config;
 mod display;
 mod eq;
 mod frame;
+mod layout;
 mod library;
 mod locations;
 mod metadata;

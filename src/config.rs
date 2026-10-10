@@ -52,6 +52,10 @@ pub struct AppConfig {
     /// Let the desktop draw the window frame instead of UnAmp's own title
     /// bar, which follows the skin (see ADR-0020).
     pub system_title_bar: bool,
+    /// Snap floating windows to a grid and to each other (see ADR-0022).
+    pub snap_to_grid: bool,
+    /// Lay the windows out as tiles filling the app instead of floating.
+    pub tile_windows: bool,
 }
 
 impl Default for AppConfig {
@@ -75,6 +79,8 @@ impl Default for AppConfig {
             show_library: true,
             show_waveform: false,
             system_title_bar: false,
+            snap_to_grid: false,
+            tile_windows: false,
         }
     }
 }
