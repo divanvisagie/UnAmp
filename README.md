@@ -133,10 +133,6 @@ sudo apt install -y libasound2-dev pkg-config
 cargo run --release
 ```
 
-Running from source? `make install-desktop` registers a launcher and icon for your checkout in
-`~/.local/share` (undo with `make uninstall-desktop`), so GNOME's dock and media controls show
-UnAmp's name and icon.
-
 ### Build the .deb yourself
 
 ```bash

@@ -46,7 +46,7 @@ NOTES_FLAG := $(if $(NOTES),--notes-file "$(NOTES)")
 
 SCREENSHOT := docs/screenshot.png
 
-.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean-deb clean-icons icons icon-runtime release release-check install-desktop uninstall-desktop screenshot docs dmg build-macos install-macos
+.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean clean-deb clean-icons icons icon-runtime release release-check screenshot docs dmg build-macos install-macos
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -118,25 +118,6 @@ build-deb: ## Build the .deb into target/deb/
 install-linux: build-deb
 	sudo apt install --reinstall -y "./$(DEB_PATH)"
 
-# For running from source: registers UnAmp's launcher and icon in your home
-# directory, so GNOME (dock, media controls) shows its name and icon. The
-# launcher runs this checkout's release build.
-USER_APPS := $(HOME)/.local/share/applications
-USER_ICONS := $(HOME)/.local/share/icons/hicolor/scalable/apps
-
-install-desktop: ## Register a launcher + icon for this checkout's build in ~/.local/share
-	cargo build --release --bin $(APP_NAME)
-	mkdir -p "$(USER_APPS)" "$(USER_ICONS)"
-	sed 's#^Exec=.*#Exec=$(CURDIR)/target/release/$(APP_NAME)#' "$(LINUX_DESKTOP_SRC)" > "$(USER_APPS)/$(APP_NAME).desktop"
-	install -m 644 "$(LINUX_ICON_SRC)" "$(USER_ICONS)/$(APP_NAME).svg"
-	-update-desktop-database "$(USER_APPS)" >/dev/null 2>&1
-	-gtk-update-icon-cache -q -t "$(HOME)/.local/share/icons/hicolor" >/dev/null 2>&1
-	@echo "Installed $(USER_APPS)/$(APP_NAME).desktop (runs $(CURDIR)/target/release/$(APP_NAME))"
-
-uninstall-desktop: ## Remove what install-desktop added
-	rm -f "$(USER_APPS)/$(APP_NAME).desktop" "$(USER_ICONS)/$(APP_NAME).svg"
-	-update-desktop-database "$(USER_APPS)" >/dev/null 2>&1
-
 # Runs UnAmp against a throwaway home of synthesised songs (see
 # examples/fake_library.rs), so the picture never shows your own music,
 # folders or network shares. The app plays muted, captures its own window
@@ -154,6 +135,9 @@ screenshot: ## Regenerate docs/screenshot.png from a temporary library of fake s
 	test -s "$$tmp/shot.png" || { echo "no screenshot was taken"; exit 1; }; \
 	mv "$$tmp/shot.png" "$(SCREENSHOT)"
 	@echo "Updated $(SCREENSHOT)"
+
+clean: ## Remove all build output (fixes cargo run running a stale build)
+	cargo clean
 
 clean-deb: ## Remove built .deb artifacts
 	rm -rf "$(DEB_DIR)"
@@ -186,6 +170,10 @@ release: ## Bump, tag and push a release, publish the crate; CI builds the .deb/
 	git push --quiet origin "$(RELEASE_BRANCH)" "$(TAG)"
 	gh release create "$(TAG)" --draft --title "$(TAG)" $(NOTES_FLAG) --generate-notes --verify-tag
 	cargo publish
+	# publish's verify build shares target/debug and leaves the dev build's
+	# fingerprint pointing at target/package's sources, so `cargo run` stops
+	# seeing edits to src/ until this crate's build is cleaned.
+	cargo clean -p $(APP_NAME)
 	@echo "Released $(APP_NAME) $(NEXT_VERSION) to crates.io and pushed $(TAG)."
 	@echo "GitHub is building the .deb and .dmg; the release goes public, and the site's"
 	@echo "downloads move to $(TAG), when they're done. Follow it with: gh run watch"
