@@ -9,6 +9,15 @@ what's there: album art, a scrolling title, a big time display, a proper bar spe
 a 10-band equalizer. Like the original, it comes in separate windows — Player, Equalizer,
 Playlist and Media Library — that you can open, close and arrange.
 
+## Screenshot
+
+![UnAmp playing a track, with the Player, Equalizer and Playlist down the left and the Media Library and Waveform on the right](docs/screenshot.png)
+
+The library in the picture is fake: `make screenshot` builds a temporary folder of synthesised
+songs, runs UnAmp against it, and saves the result to `docs/screenshot.png`, so it can be
+regenerated after any UI change without showing anyone's real music or drives
+([ADR-0021](docs/adr/0021-screenshot-mode.md)).
+
 ## Status
 
 New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.md)).
