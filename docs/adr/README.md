@@ -61,7 +61,8 @@ mechanics of adding one.
 | [0019](0019-follow-desktop-color-scheme.md) | Follow the desktop's light/dark setting through the XDG portal | Accepted |
 | [0020](0020-draw-own-window-frame.md) | Draw UnAmp's own window frame, following the skin | Accepted |
 | [0021](0021-screenshot-mode.md) | Generate the docs screenshot from a fake library, with a screenshot mode in the app | Proposed |
-| [0022](0022-snap-to-grid-and-tiling.md) | Snap floating windows to a grid, or tile them | Accepted |
+| [0022](0022-snap-to-grid-and-tiling.md) | Snap floating windows to a grid, or tile them | Accepted (tile drawing superseded by [ADR-0023](0023-tile-with-pinned-windows.md)) |
+| [0023](0023-tile-with-pinned-windows.md) | Tile with the real windows, pinned in place, instead of panels | Accepted |
 
 ## Decision Relationship
 
@@ -100,6 +101,8 @@ flowchart TD
     P --> U
     F --> V[0022: Snap to grid, tiling]
     J --> V
+    V --> W[0023: Tiles are pinned windows]
+    R --> W
 ```
 
 ## Revisit Triggers

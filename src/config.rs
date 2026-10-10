@@ -54,8 +54,11 @@ pub struct AppConfig {
     pub system_title_bar: bool,
     /// Snap floating windows to a grid and to each other (see ADR-0022).
     pub snap_to_grid: bool,
-    /// Lay the windows out as tiles filling the app instead of floating.
+    /// Lay the windows out as tiles filling the app instead of floating
+    /// (the default; see ADR-0023).
     pub tile_windows: bool,
+    /// Height of the Waveform under the Media Library when tiled.
+    pub tile_waveform_height: f32,
 }
 
 impl Default for AppConfig {
@@ -80,7 +83,8 @@ impl Default for AppConfig {
             show_waveform: false,
             system_title_bar: false,
             snap_to_grid: false,
-            tile_windows: false,
+            tile_windows: true,
+            tile_waveform_height: 200.0,
         }
     }
 }
@@ -134,5 +138,6 @@ mod tests {
         assert_eq!(cfg.volume, 0.8);
         assert_eq!(cfg.repeat, Repeat::Off);
         assert!(!cfg.show_waveform, "the waveform window starts off");
+        assert!(cfg.tile_windows, "windows start tiled");
     }
 }

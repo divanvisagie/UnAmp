@@ -958,7 +958,7 @@ impl UnAmpApp {
 }
 
 impl UnAmpApp {
-    fn show_classic(&mut self, ctx: &egui::Context, skin: &mut ClassicSkin, place: ClassicPlace<'_>) {
+    fn show_classic(&mut self, ctx: &egui::Context, skin: &mut ClassicSkin, place: ClassicPlace) {
         let title = self.now_playing_title().unwrap_or_else(|| "UnAmp".to_string());
         let info = self.now_info.as_ref().filter(|_| self.engine.current().is_some());
         let (bars, peaks) = self.visualizer.levels();
@@ -987,46 +987,35 @@ impl UnAmpApp {
         };
 
         let mut actions = Vec::new();
-        let origin = match place {
-            ClassicPlace::Floating(origin) => origin,
-            // Stacked straight down the tile column, with no gaps, as in Winamp.
-            ClassicPlace::Tiled(ui) => {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                if self.config.show_player {
-                    classic::show_player(ui, skin, &view, &mut actions);
-                }
-                if self.config.show_equalizer {
-                    classic::show_eq(ui, skin, &view, &mut actions);
-                }
-                if self.config.show_playlist {
-                    classic::show_playlist(ui, skin, &view, &mut self.reorder, &mut actions);
-                }
-                drop(view);
-                for command in actions {
-                    self.apply(command, ctx);
-                }
-                return;
-            }
-        };
-
-        // Fixed-size, frameless windows stacked like Winamp's; drag them
-        // by any part that isn't a control.
+        // Fixed-size, frameless windows stacked like Winamp's. Floating, drag
+        // them by any part that isn't a control; tiled, they're pinned flush
+        // down the column, closing up when one is turned off.
         // Unconstrained: egui's desktop constraint pushed the frameless
         // playlist up over the equalizer even when the stack fit (measured
         // 2026-10-09). Windows → Reset layout recovers a window lost off-screen.
+        let (origin, tiled) = match place {
+            ClassicPlace::Floating(origin) => (origin, false),
+            ClassicPlace::Tiled(origin) => (origin, true),
+        };
         let mut snapper = std::mem::take(&mut self.snapper);
-        let mut window = |id: &str, y: f32, size: egui::Vec2, ctx: &egui::Context, add: &mut dyn FnMut(&mut egui::Ui)| {
+        let mut y = 0.0;
+        let mut window = |id: &str, default_y: f32, size: egui::Vec2, ctx: &egui::Context, add: &mut dyn FnMut(&mut egui::Ui)| {
+            let size = size * classic::SCALE;
             let window = egui::Window::new(id)
-                .id(egui::Id::new(id))
                 .title_bar(false)
                 .frame(egui::Frame::NONE)
                 .resizable(false)
-                .fixed_size(size * classic::SCALE)
-                .default_pos(origin + egui::vec2(0.0, y))
+                .fixed_size(size)
                 .constrain(false);
-            let window = snapper.prepare(egui::Id::new(id), window);
+            if tiled {
+                window.id(egui::Id::new(id).with("tiled")).fixed_pos(origin + egui::vec2(0.0, y)).show(ctx, |ui| add(ui));
+                y += size.y;
+                return;
+            }
+            let id = egui::Id::new(id);
+            let window = snapper.prepare(id, window.id(id).default_pos(origin + egui::vec2(0.0, default_y)));
             if let Some(shown) = window.show(ctx, |ui| add(ui)) {
-                snapper.shown(layout::Shown { id: egui::Id::new(id), rect: shown.response.rect, resizable: false });
+                snapper.shown(layout::Shown { id, rect: shown.response.rect, resizable: false });
             }
         };
         let row = classic::MAIN_SIZE.y * classic::SCALE;
@@ -1285,78 +1274,146 @@ impl UnAmpApp {
         }));
     }
 
-    /// The floating windows on the desktop: the classic stack or the egui
-    /// Player, Equalizer and Playlist, plus Waveform and Media Library.
-    fn show_floating(&mut self, ctx: &egui::Context, desktop: egui::Rect) {
+    /// The Player, Equalizer, Playlist, Waveform and Media Library windows
+    /// (or the classic stack in their place), floating on the desktop or,
+    /// in tiled mode, pinned into a layout that fills it (see ADR-0022):
+    /// the stack down the left, the library on the right with the waveform
+    /// under it. Tiled windows are the same windows, so they look the same.
+    fn show_windows(&mut self, ctx: &egui::Context, desktop: egui::Rect) {
         let left = desktop.left() + 10.0;
         let top = desktop.top() + 10.0;
+        let tiled = self.config.tile_windows;
+        let area = desktop.shrink(TILE_GAP);
+        let column = match &self.classic {
+            Some(_) => classic::MAIN_SIZE.x * classic::SCALE,
+            None => STACK_WIDTH + egui::Frame::window(&ctx.global_style()).total_margin().sum().x,
+        };
+        let stack_open = self.config.show_player || self.config.show_equalizer || self.config.show_playlist;
+        let right = egui::Rect::from_min_max(
+            egui::pos2(if stack_open { area.left() + column + TILE_GAP } else { area.left() }, area.top()),
+            area.max,
+        );
 
         // Default layout: the classic stack on the left, library on the right.
-        // egui remembers where the user moves and resizes them.
+        // egui remembers where the user moves and resizes floating windows.
         if let Some(mut skin) = self.classic.take() {
-            self.show_classic(ctx, &mut skin, ClassicPlace::Floating(egui::pos2(left, top)));
+            let place = if tiled { ClassicPlace::Tiled(area.min) } else { ClassicPlace::Floating(egui::pos2(left, top)) };
+            self.show_classic(ctx, &mut skin, place);
             self.classic = Some(skin);
         } else {
+            let mut y = area.top();
             let mut open = self.config.show_player;
-            let window = egui::Window::new("UnAmp")
-                .open(&mut open)
-                .resizable(false)
-                .collapsible(true)
-                .default_pos([left, top])
-                .constrain_to(desktop);
-            self.show_window(ctx, "player_window", window, false, |app, ui| app.show_player(ui));
+            let window = egui::Window::new("UnAmp").open(&mut open).resizable(false);
+            let window = match tiled {
+                true => pinned(window, ctx).fixed_pos(area.left_top()),
+                false => window.default_pos([left, top]).constrain_to(desktop),
+            };
+            if let Some(rect) = self.show_window(ctx, "player_window", window, false, |app, ui| app.show_player(ui)) {
+                y = rect.bottom() + TILE_GAP;
+            }
             self.config.show_player = open;
 
             let mut open = self.config.show_equalizer;
-            let window = egui::Window::new("Equalizer")
-                .open(&mut open)
-                .resizable(false)
-                .collapsible(true)
-                .default_pos([left, top + 200.0])
-                .constrain_to(desktop);
-            self.show_window(ctx, "equalizer_window", window, false, |app, ui| app.show_equalizer(ui));
+            let window = egui::Window::new("Equalizer").open(&mut open).resizable(false);
+            let window = match tiled {
+                true => pinned(window, ctx).fixed_pos([area.left(), y]),
+                false => window.default_pos([left, top + 200.0]).constrain_to(desktop),
+            };
+            if let Some(rect) = self.show_window(ctx, "equalizer_window", window, false, |app, ui| app.show_equalizer(ui)) {
+                y = rect.bottom() + TILE_GAP;
+            }
             self.config.show_equalizer = open;
 
             let mut open = self.config.show_playlist;
-            let window = egui::Window::new("Playlist")
-                .open(&mut open)
-                .resizable(true)
-                .default_pos([left, top + 500.0])
-                // Window frame included, so it lines up with the fixed-width stack above.
-                .default_size([STACK_WIDTH + 14.0, 220.0])
-                .min_size([320.0, 120.0])
-                .constrain_to(desktop);
+            let window = egui::Window::new("Playlist").open(&mut open);
+            let window = match tiled {
+                // The rest of the column.
+                true => pinned(window, ctx).fixed_rect(egui::Rect::from_min_max(
+                    egui::pos2(area.left(), y),
+                    egui::pos2(area.left() + column, area.bottom().max(y + 120.0)),
+                )),
+                false => window
+                    .resizable(true)
+                    .default_pos([left, top + 500.0])
+                    // Window frame included, so it lines up with the fixed-width stack above.
+                    .default_size([STACK_WIDTH + 14.0, 220.0])
+                    .min_size([320.0, 120.0])
+                    .constrain_to(desktop),
+            };
             self.show_window(ctx, "playlist_window", window, true, |app, ui| app.show_playlist_view(ui, ctx));
             self.config.show_playlist = open;
         }
 
+        // Tiled: the library above, the waveform below, split by a handle
+        // in the gap between them. Either one alone takes the whole side.
+        let (library_rect, waveform_rect) = match (self.config.show_library, self.config.show_waveform) {
+            (true, true) => {
+                let height = self.config.tile_waveform_height.clamp(110.0, (right.height() - 240.0 - TILE_GAP).max(110.0));
+                let split = right.bottom() - height - TILE_GAP;
+                if tiled {
+                    self.split_handle(ctx, egui::Rect::from_x_y_ranges(right.x_range(), split..=split + TILE_GAP));
+                }
+                (
+                    egui::Rect::from_min_max(right.min, egui::pos2(right.right(), split)),
+                    egui::Rect::from_min_max(egui::pos2(right.left(), split + TILE_GAP), right.max),
+                )
+            }
+            _ => (right, right),
+        };
+
         // Off by default; Reset layout leaves it as it is.
         let mut open = self.config.show_waveform;
-        let window = egui::Window::new("Waveform")
-            .open(&mut open)
-            .resizable(true)
-            .default_pos([left + STACK_WIDTH + 40.0, top + 590.0])
-            .default_size([620.0, 170.0])
-            .min_size([240.0, 110.0])
-            .constrain_to(desktop);
+        let window = egui::Window::new("Waveform").open(&mut open);
+        let window = match tiled {
+            true => pinned(window, ctx).fixed_rect(waveform_rect),
+            false => window
+                .resizable(true)
+                .default_pos([left + STACK_WIDTH + 40.0, top + 590.0])
+                .default_size([620.0, 170.0])
+                .min_size([240.0, 110.0])
+                .constrain_to(desktop),
+        };
         self.show_window(ctx, "waveform_window", window, true, |app, ui| app.show_waveform(ui, ctx));
         self.config.show_waveform = open;
 
         let mut open = self.config.show_library;
-        let window = egui::Window::new("Media Library")
-            .open(&mut open)
-            .resizable(true)
-            .default_pos([left + STACK_WIDTH + 40.0, top])
-            .default_size([620.0, 560.0])
-            .min_size([420.0, 240.0])
-            .constrain_to(desktop);
+        let window = egui::Window::new("Media Library").open(&mut open);
+        let window = match tiled {
+            true => pinned(window, ctx).fixed_rect(library_rect),
+            false => window
+                .resizable(true)
+                .default_pos([left + STACK_WIDTH + 40.0, top])
+                .default_size([620.0, 560.0])
+                .min_size([420.0, 240.0])
+                .constrain_to(desktop),
+        };
         self.show_window(ctx, "library_window", window, true, |app, ui| app.show_library(ui, ctx));
         self.config.show_library = open;
-
     }
 
-    /// Shows a floating window, applying and recording grid snaps
-    /// (see `layout`). `resizable` windows also snap their size.
+    /// The drag handle between the tiled library and waveform.
+    fn split_handle(&mut self, ctx: &egui::Context, rect: egui::Rect) {
+        egui::Area::new(egui::Id::new("tile_split"))
+            .fixed_pos(rect.min)
+            .constrain(false)
+            .show(ctx, |ui| {
+                let (rect, resp) = ui.allocate_exact_size(rect.size(), egui::Sense::drag());
+                let resp = resp.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+                if resp.hovered() || resp.dragged() {
+                    let stroke = ui.visuals().widgets.hovered.fg_stroke;
+                    let y = rect.center().y;
+                    ui.painter().hline(rect.center().x - 20.0..=rect.center().x + 20.0, y, stroke);
+                }
+                if resp.dragged() {
+                    self.config.tile_waveform_height -= resp.drag_delta().y;
+                }
+            });
+    }
+
+    /// Shows a window and returns where it went. Floating windows get grid
+    /// snaps applied and recorded (see `layout`); `resizable` ones also snap
+    /// their size. Tiled windows have ids of their own, so the floating
+    /// layout is still there when tiling is turned off.
     fn show_window(
         &mut self,
         ctx: &egui::Context,
@@ -1364,72 +1421,18 @@ impl UnAmpApp {
         window: egui::Window<'_>,
         resizable: bool,
         add: impl FnOnce(&mut Self, &mut egui::Ui),
-    ) {
+    ) -> Option<egui::Rect> {
+        // No collapse arrows: the windows are opened and closed whole.
+        let window = window.collapsible(false);
+        if self.config.tile_windows {
+            let id = egui::Id::new(id).with("tiled");
+            return window.id(id).show(ctx, |ui| add(self, ui)).map(|shown| shown.response.rect);
+        }
         let id = egui::Id::new(id);
         let window = self.snapper.prepare(id, window.id(id));
-        let shown = window.show(ctx, |ui| add(self, ui));
-        if let Some(shown) = shown {
-            // A collapsed window only moves.
-            let resizable = resizable && shown.inner.is_some();
-            self.snapper.shown(layout::Shown { id, rect: shown.response.rect, resizable });
-        }
-    }
-
-    /// The tiled layout: the Player/Equalizer/Playlist stack down the left,
-    /// the Media Library filling the rest with the Waveform under it. The
-    /// splits between them can be dragged.
-    fn show_tiled(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let stack_open = self.config.show_player || self.config.show_equalizer || self.config.show_playlist;
-        if stack_open {
-            let width = match &self.classic {
-                Some(_) => classic::MAIN_SIZE.x * classic::SCALE,
-                None => STACK_WIDTH + tile_frame(ui.style()).total_margin().sum().x,
-            };
-            egui::Panel::left("tile_stack")
-                .exact_size(width + TILE_GAP)
-                .resizable(false)
-                .show_separator_line(false)
-                .frame(egui::Frame::NONE.inner_margin(egui::Margin { right: TILE_GAP as i8, ..Default::default() }))
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = TILE_GAP;
-                    if let Some(mut skin) = self.classic.take() {
-                        self.show_classic(ctx, &mut skin, ClassicPlace::Tiled(ui));
-                        self.classic = Some(skin);
-                        return;
-                    }
-                    if self.config.show_player {
-                        let open = tile(ui, "UnAmp", false, |ui| self.show_player(ui));
-                        self.config.show_player = open;
-                    }
-                    if self.config.show_equalizer {
-                        let open = tile(ui, "Equalizer", false, |ui| self.show_equalizer(ui));
-                        self.config.show_equalizer = open;
-                    }
-                    if self.config.show_playlist {
-                        let open = tile(ui, "Playlist", true, |ui| self.show_playlist_view(ui, ctx));
-                        self.config.show_playlist = open;
-                    }
-                });
-        }
-        if self.config.show_waveform && self.config.show_library {
-            egui::Panel::bottom("tile_waveform")
-                .resizable(true)
-                .default_size(200.0)
-                .min_size(120.0)
-                .show_separator_line(false)
-                .frame(egui::Frame::NONE.inner_margin(egui::Margin { top: TILE_GAP as i8, ..Default::default() }))
-                .show(ui, |ui| {
-                    let open = tile(ui, "Waveform", true, |ui| self.show_waveform(ui, ctx));
-                    self.config.show_waveform = open;
-                });
-        }
-        if self.config.show_library {
-            let open = tile(ui, "Media Library", true, |ui| self.show_library(ui, ctx));
-            self.config.show_library = open;
-        } else if self.config.show_waveform {
-            let open = tile(ui, "Waveform", true, |ui| self.show_waveform(ui, ctx));
-            self.config.show_waveform = open;
-        }
+        let shown = window.show(ctx, |ui| add(self, ui))?;
+        self.snapper.shown(layout::Shown { id, rect: shown.response.rect, resizable });
+        Some(shown.response.rect)
     }
 
     /// Drives screenshot mode: play, wait, capture, quit.
@@ -1754,15 +1757,12 @@ impl eframe::App for UnAmpApp {
                 });
             });
 
-        let snapping = self.config.snap_to_grid && !self.config.tile_windows;
+        let tiled = self.config.tile_windows;
+        let snapping = self.config.snap_to_grid && !tiled;
         let dragging = ctx.dragged_id().is_some();
         // The desktop the windows float on, or that the tiles fill.
         let desktop = egui::CentralPanel::default()
             .show(ui, |ui| {
-                if self.config.tile_windows {
-                    self.show_tiled(ui, ctx);
-                    return;
-                }
                 // A whisper of the text colour over the background, so the
                 // watermark stays faint whatever the skin's contrast.
                 let visuals = ui.visuals();
@@ -1773,17 +1773,16 @@ impl eframe::App for UnAmpApp {
                 if snapping && dragging {
                     paint_grid(ui, ui.max_rect().min, watermark);
                 }
-                ui.centered_and_justified(|ui| {
-                    ui.label(egui::RichText::new("UnAmp").size(64.0).color(watermark));
-                });
+                if !tiled {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(egui::RichText::new("UnAmp").size(64.0).color(watermark));
+                    });
+                }
             })
             .response
             .rect;
-        if !self.config.tile_windows {
-            self.show_floating(ctx, desktop);
-            let origin = desktop.min + egui::vec2(10.0, 10.0);
-            self.snapper.finish(ctx, origin, snapping);
-        }
+        self.show_windows(ctx, desktop);
+        self.snapper.finish(ctx, desktop.min + egui::vec2(10.0, 10.0), snapping);
 
         if custom_frame {
             frame::edges(ctx, radius);
@@ -1812,42 +1811,21 @@ impl eframe::App for UnAmpApp {
 
 
 /// Where the classic-skin windows go.
-enum ClassicPlace<'a> {
+enum ClassicPlace {
     /// Floating windows, stacked from this point by default.
     Floating(egui::Pos2),
-    /// Drawn straight into the tiled layout's column.
-    Tiled(&'a mut egui::Ui),
+    /// Pinned flush down the tiled layout's column from this point.
+    Tiled(egui::Pos2),
 }
 
-/// The frame around a tile: a window's, without the shadow.
-fn tile_frame(style: &egui::Style) -> egui::Frame {
-    egui::Frame::window(style).shadow(egui::Shadow::NONE)
-}
-
-/// A tile in the tiled layout: a framed box with the window's title and a
-/// close button. With `fill` it takes all the space left, else it fits its
-/// contents. Returns whether it should stay open.
-fn tile(ui: &mut egui::Ui, title: &str, fill: bool, add: impl FnOnce(&mut egui::Ui)) -> bool {
-    let frame = tile_frame(ui.style());
-    let room = ui.available_size() - frame.total_margin().sum();
-    let mut open = true;
-    frame.show(ui, |ui| {
-        if fill {
-            ui.set_min_size(room);
-            ui.set_max_size(room);
-        }
-        ui.horizontal(|ui| {
-            ui.strong(title);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("\u{00D7}").on_hover_text("Close").clicked() {
-                    open = false;
-                }
-            });
-        });
-        ui.separator();
-        add(ui);
-    });
-    open
+/// A window pinned into the tiled layout: not movable or resizable (the
+/// caller fixes its position or rect), and without a shadow over its
+/// neighbours.
+fn pinned<'a>(window: egui::Window<'a>, ctx: &egui::Context) -> egui::Window<'a> {
+    window
+        .resizable(false)
+        .constrain(false)
+        .frame(egui::Frame::window(&ctx.global_style()).shadow(egui::Shadow::NONE))
 }
 
 /// Faint dots on the snapping grid, shown while a window is being dragged.

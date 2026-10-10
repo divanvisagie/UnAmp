@@ -18,8 +18,9 @@ New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.
 - Floating Player / Equalizer / Playlist / Media Library windows; toggle them from the Windows
   menu or the player's EQ / PL / ML buttons. Layout is remembered; Windows → Reset layout restores it
   ([ADR-0006](docs/adr/0006-floating-egui-windows.md))
-- Windows → Snap to grid lines windows up on a grid and against each other's edges when you move
-  or resize them; Windows → Tile windows fills the app with them instead, with draggable splits
+- Windows are tiled to fill the app by default, with a draggable split; turn off Windows → Tile
+  windows to float them, and Windows → Snap to grid lines floating windows up on a grid and
+  against each other's edges when you move or resize them
   ([ADR-0022](docs/adr/0022-snap-to-grid-and-tiling.md))
 - Skins: stock egui by default, or pick **Steam Classic** (the old olive-green Steam client) from
   the Skins menu; write your own in TOML ([ADR-0008](docs/adr/0008-toml-skins.md)), or drop in a

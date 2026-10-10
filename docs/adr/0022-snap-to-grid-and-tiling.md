@@ -4,7 +4,7 @@ Date: 2026-10-10
 
 ## Status
 
-Accepted
+Accepted (how tiles are drawn superseded by [ADR-0023](0023-tile-with-pinned-windows.md))
 
 ## Context
 
