@@ -11,6 +11,7 @@ use crate::display::{self, PlayerStatus};
 use crate::reorder::{DragList, Reorder};
 use crate::config::Repeat;
 use crate::eq::{self, EqSnapshot};
+use crate::eq_profiles::{self, Profiles};
 use crate::library::Track;
 use crate::player::PlayState;
 use crate::visualizer;
@@ -27,6 +28,8 @@ pub struct View<'a> {
     pub eq_open: bool,
     pub pl_open: bool,
     pub eq: EqSnapshot,
+    pub eq_profiles: &'a Profiles,
+    pub eq_profile: Option<&'a str>,
     pub bars: &'a [f32; visualizer::BANDS],
     pub peaks: &'a [f32; visualizer::BANDS],
     pub tracks: &'a [Track],
@@ -312,19 +315,16 @@ pub fn show_eq(ui: &mut egui::Ui, skin: &mut ClassicSkin, v: &View, out: &mut Ve
     skin.sprite(&p, o, Bmp::Eqmain, [36, 119, 32, 12], [40.0, 18.0]);
 
     let presets = button(ui, skin, &p, o, id.with("presets"), Bmp::Eqmain, [217.0, 18.0], [44, 12], [224, 164], [224, 176]);
-    egui::Popup::menu(&presets).show(|ui| {
-        for (name, gains) in eq::PRESETS {
-            if ui.button(*name).clicked() {
-                snap.gains = *gains;
-                snap.enabled = true;
+    egui::Popup::menu(&presets)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            eq_profiles::menu(ui, v.eq_profiles, v.eq_profile, &mut snap, out);
+            ui.separator();
+            if ui.button("Reset").clicked() {
+                eq_profiles::reset(&mut snap, out);
+                ui.close();
             }
-        }
-        ui.separator();
-        if ui.button("Reset").clicked() {
-            snap.gains = [0.0; eq::BANDS];
-            snap.preamp = 0.0;
-        }
-    });
+        });
 
     // Response graph in the skin's own line colours, preamp as a flat line.
     skin.sprite(&p, o, Bmp::Eqmain, [0, 294, 113, 19], [86.0, 17.0]);

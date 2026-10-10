@@ -38,6 +38,13 @@ pub enum Command {
     CycleRepeat,
     SetRepeat(Repeat),
     SetEq(EqSnapshot),
+    /// Which preset or profile the EQ was last loaded from, if any.
+    SetEqProfile(Option<String>),
+    /// Save the current EQ as a named profile, replacing any of that name.
+    SaveEqProfile(String),
+    /// Ignored if `to` is already taken.
+    RenameEqProfile { from: String, to: String },
+    DeleteEqProfile(String),
     /// Time display: elapsed ⇄ remaining.
     ToggleRemaining,
     OpenWindow(Window),

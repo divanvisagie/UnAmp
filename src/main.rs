@@ -5,6 +5,7 @@ mod command;
 mod config;
 mod display;
 mod eq;
+mod eq_profiles;
 mod frame;
 mod layout;
 mod library;

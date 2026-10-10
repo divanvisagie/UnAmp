@@ -45,6 +45,8 @@ release also ships an unsigned macOS `.dmg`, built automatically ([ADR-0025](doc
   ([ADR-0017](docs/adr/0017-daw-style-waveform.md))
 - 10-band graphic equalizer (60 Hz – 16 kHz) with preamp, presets and a live response curve;
   double-click a slider to zero it ([ADR-0007](docs/adr/0007-biquad-equalizer-in-source-chain.md))
+- Save your own EQ profiles, then rename or delete them from the presets menu
+  ([ADR-0026](docs/adr/0026-eq-profiles-in-eq-toml.md))
 - Search (**Ctrl+F**): finds tracks and folders anywhere under the current location by matching
   every word against their paths, streaming results as it goes, no scan or database needed
   ([ADR-0015](docs/adr/0015-search-by-walking.md))
@@ -148,6 +150,17 @@ repeat, time display mode, equalizer settings, skin and which windows are open. 
 sizes are kept by eframe in `~/.local/share/unamp/`, next to `playlist.m3u8` and `queue.m3u8`.
 Those are ordinary extended M3U playlists; UnAmp marks where you were with `#UNAMP-CURRENT` and
 `#UNAMP-PLAYING` comment lines, which other players ignore.
+
+Saved EQ profiles live in `~/.config/unamp/eq.toml`, one table per profile:
+
+```toml
+["Late Night"]
+preamp = -2.0
+bands = [3.0, 2.0, 0.0, -1.0, -2.0, -1.0, 0.0, 1.0, 1.0, 0.0]
+```
+
+It's read at startup and only written when you save, rename or delete a profile, so it's safe to
+edit by hand while UnAmp is closed.
 
 ## Development
 

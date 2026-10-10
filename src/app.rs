@@ -2,21 +2,22 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use crate::appearance;
+use crate::classic::{self, ClassicSkin};
+use crate::command::{Command, PlaylistAction, Window, with_queue_marker};
 use crate::config::{AppConfig, Repeat};
 use crate::display;
 use crate::eq::{self, EqParams, EqSnapshot};
+use crate::eq_profiles::{self, Profiles};
 use crate::frame;
 use crate::layout::{self, Snapper};
 use crate::library::{self, Library, Track, TrackAction};
 use crate::metadata::{self, TrackInfo};
-use crate::player::{Engine, PlayState};
 use crate::mpris::{self, Mpris};
-use crate::command::{Command, PlaylistAction, Window, with_queue_marker};
+use crate::player::{Engine, PlayState};
 use crate::playlist::Playlist;
 use crate::reorder::{DragList, Reorder};
 use crate::screenshot::{self, Screenshot};
 use crate::session;
-use crate::classic::{self, ClassicSkin};
 use crate::skin::{self, Palette, Skin};
 use crate::visualizer::Visualizer;
 use crate::waveform::{self, WaveColors, Waveforms};
@@ -54,6 +55,9 @@ pub struct UnAmpApp {
     visualizer: Visualizer,
     waveforms: Waveforms,
     eq: Arc<EqParams>,
+    eq_profiles: Profiles,
+    /// Why `eq.toml` couldn't be read or written, shown in the status bar.
+    eq_profiles_error: Option<String>,
     skins: Vec<Skin>,
     /// Problems loading skin files, shown in the Skins menu.
     skin_errors: Vec<String>,
@@ -94,6 +98,10 @@ impl UnAmpApp {
         let saved_revision = playlist.revision();
         let eq = EqParams::new(config.eq_enabled, config.eq_preamp, config.eq_bands);
         let engine = Engine::new(effective_volume(&config), Arc::clone(&eq));
+        let (eq_profiles, eq_profiles_error) = match Profiles::load() {
+            Ok(profiles) => (profiles, None),
+            Err(e) => (Profiles::default(), Some(e)),
+        };
         let visualizer = Visualizer::new(engine.tap());
         let (art_tx, art_rx) = mpsc::channel();
         let (skins, mut skin_errors) = skin::load_all();
@@ -116,6 +124,8 @@ impl UnAmpApp {
             visualizer,
             waveforms: Waveforms::default(),
             eq,
+            eq_profiles,
+            eq_profiles_error,
             skins,
             skin_errors,
             skin_notice: None,
@@ -160,13 +170,24 @@ impl UnAmpApp {
                 .filter(|_| art.is_some())
                 .and_then(metadata::cache_art)
                 .map(|p| mpris::file_url(&p));
-            let _ = tx.send(NowPlayingResult { generation, info, art, art_url });
+            let _ = tx.send(NowPlayingResult {
+                generation,
+                info,
+                art,
+                art_url,
+            });
             ctx.request_repaint();
         });
     }
 
     fn poll_now_playing(&mut self, ctx: &egui::Context) {
-        while let Ok(NowPlayingResult { generation, info, art, art_url }) = self.art_rx.try_recv() {
+        while let Ok(NowPlayingResult {
+            generation,
+            info,
+            art,
+            art_url,
+        }) = self.art_rx.try_recv()
+        {
             if generation != self.art_generation {
                 continue;
             }
@@ -183,7 +204,8 @@ impl UnAmpApp {
     /// Plays what the library is showing (the folder, or search results)
     /// as the new playlist, starting at `index`.
     fn play_from_folder(&mut self, index: usize, ctx: &egui::Context) {
-        self.playlist.replace(self.library.visible_tracks().to_vec(), index);
+        self.playlist
+            .replace(self.library.visible_tracks().to_vec(), index);
         if let Some(track) = self.playlist.now_playing().cloned() {
             self.start_track(track, ctx);
         }
@@ -263,6 +285,27 @@ impl UnAmpApp {
                 self.config.eq_preamp = snap.preamp;
                 self.config.eq_bands = snap.gains;
             }
+            Command::SetEqProfile(name) => self.config.eq_profile = name,
+            Command::SaveEqProfile(name) => {
+                self.eq_profiles.insert(name.clone(), &self.eq.snapshot());
+                self.config.eq_profile = Some(name);
+                self.eq_profiles_error = self.eq_profiles.save().err();
+            }
+            Command::RenameEqProfile { from, to } => {
+                if self.eq_profiles.rename(&from, to.clone())
+                    && self.config.eq_profile.as_deref() == Some(from.as_str())
+                {
+                    self.config.eq_profile = Some(to);
+                }
+                self.eq_profiles_error = self.eq_profiles.save().err();
+            }
+            Command::DeleteEqProfile(name) => {
+                self.eq_profiles.remove(&name);
+                if self.config.eq_profile.as_deref() == Some(name.as_str()) {
+                    self.config.eq_profile = None;
+                }
+                self.eq_profiles_error = self.eq_profiles.save().err();
+            }
             Command::ToggleRemaining => self.config.show_remaining = !self.config.show_remaining,
             Command::OpenWindow(w) => *self.window_open(w) = true,
             Command::CloseWindow(w) => *self.window_open(w) = false,
@@ -330,7 +373,11 @@ impl UnAmpApp {
             None => metadata::file_stem(path),
         };
         // Queued tracks aren't at a playlist position, so they get no number.
-        let number = self.playlist.playing_index().map(|i| format!("{}. ", i + 1)).unwrap_or_default();
+        let number = self
+            .playlist
+            .playing_index()
+            .map(|i| format!("{}. ", i + 1))
+            .unwrap_or_default();
         let length = self
             .engine
             .duration()
@@ -365,8 +412,13 @@ impl UnAmpApp {
             ui.vertical(|ui| {
                 let title = self
                     .now_playing_title()
-                    .unwrap_or_else(|| "UnAmp".to_string());
-                marquee(ui, &title, self.engine.state() == PlayState::Playing, self.palette.title);
+                    .unwrap_or_else(|| "Player".to_string());
+                marquee(
+                    ui,
+                    &title,
+                    self.engine.state() == PlayState::Playing,
+                    self.palette.title,
+                );
                 ui.add_space(2.0);
 
                 ui.horizontal(|ui| {
@@ -387,7 +439,11 @@ impl UnAmpApp {
                             (Window::Library, "ML", "Media Library"),
                         ] {
                             let mut open = *self.window_open(window);
-                            if ui.toggle_value(&mut open, label).on_hover_text(hint).clicked() {
+                            if ui
+                                .toggle_value(&mut open, label)
+                                .on_hover_text(hint)
+                                .clicked()
+                            {
                                 self.apply(Command::ToggleWindow(window), &ctx);
                             }
                         }
@@ -419,7 +475,11 @@ impl UnAmpApp {
             None => {
                 let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
                 let visuals = ui.visuals();
-                ui.painter().rect_filled(rect, visuals.widgets.inactive.corner_radius, visuals.extreme_bg_color);
+                ui.painter().rect_filled(
+                    rect,
+                    visuals.widgets.inactive.corner_radius,
+                    visuals.extreme_bg_color,
+                );
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -445,7 +505,10 @@ impl UnAmpApp {
             display::TimeDisplay::BlinkOff => ("  :  ".to_string(), egui::Color32::TRANSPARENT),
             display::TimeDisplay::Shown { negative, time } => {
                 let sign = if negative { "-" } else { " " };
-                (format!("{sign}{}", metadata::format_duration(time)), self.palette.time)
+                (
+                    format!("{sign}{}", metadata::format_duration(time)),
+                    self.palette.time,
+                )
             }
         };
         let resp = ui
@@ -465,7 +528,10 @@ impl UnAmpApp {
     }
 
     fn show_stream_info(&self, ui: &mut egui::Ui) {
-        let Some(info) = self.now_info.as_ref().filter(|_| self.engine.current().is_some())
+        let Some(info) = self
+            .now_info
+            .as_ref()
+            .filter(|_| self.engine.current().is_some())
         else {
             return;
         };
@@ -508,13 +574,21 @@ impl UnAmpApp {
 
         let visuals = ui.visuals();
         let track = egui::Rect::from_center_size(rect.center(), egui::vec2(rect.width(), 4.0));
-        ui.painter().rect_filled(track, visuals.widgets.inactive.corner_radius, visuals.extreme_bg_color);
+        ui.painter().rect_filled(
+            track,
+            visuals.widgets.inactive.corner_radius,
+            visuals.extreme_bg_color,
+        );
         if duration.is_some() {
             let filled = egui::Rect::from_min_max(
                 track.min,
                 egui::pos2(track.left() + track.width() * fraction, track.max.y),
             );
-            ui.painter().rect_filled(filled, visuals.widgets.inactive.corner_radius, visuals.selection.bg_fill);
+            ui.painter().rect_filled(
+                filled,
+                visuals.widgets.inactive.corner_radius,
+                visuals.selection.bg_fill,
+            );
             // Keep the handle inside the bar at either end.
             let handle_w = 24.0;
             let handle_x = rect.left() + handle_w / 2.0 + (rect.width() - handle_w) * fraction;
@@ -527,9 +601,14 @@ impl UnAmpApp {
             } else {
                 &visuals.widgets.inactive
             };
-            ui.painter().rect_filled(handle, style.corner_radius, style.bg_fill);
             ui.painter()
-                .rect_stroke(handle, style.corner_radius, style.bg_stroke, egui::StrokeKind::Inside);
+                .rect_filled(handle, style.corner_radius, style.bg_fill);
+            ui.painter().rect_stroke(
+                handle,
+                style.corner_radius,
+                style.bg_stroke,
+                egui::StrokeKind::Inside,
+            );
 
             if let (Some(total), Some(hover)) = (duration, resp.hover_pos()) {
                 resp.on_hover_text_at_pointer(metadata::format_duration(
@@ -558,7 +637,11 @@ impl UnAmpApp {
             let mut shuffle = self.config.shuffle;
             if ui
                 .toggle_value(&mut shuffle, big("\u{1F500}"))
-                .on_hover_text(if self.config.shuffle { "Shuffle: on" } else { "Shuffle: off" })
+                .on_hover_text(if self.config.shuffle {
+                    "Shuffle: on"
+                } else {
+                    "Shuffle: off"
+                })
                 .clicked()
             {
                 self.apply(Command::ToggleShuffle, ctx);
@@ -595,7 +678,11 @@ impl UnAmpApp {
                 });
                 let speaker = ui
                     .add(egui::Button::new(speaker_icon(&self.config)).frame(false))
-                    .on_hover_text(if self.config.muted { "Unmute (M)" } else { "Mute (M)" });
+                    .on_hover_text(if self.config.muted {
+                        "Unmute (M)"
+                    } else {
+                        "Mute (M)"
+                    });
                 if speaker.clicked() {
                     self.apply(Command::ToggleMute, ctx);
                 }
@@ -633,28 +720,38 @@ impl UnAmpApp {
         // box fills exactly what's left (a guessed width made the resizable
         // window grow a few pixels every frame).
         // (Inside a horizontal row so the layout only takes one line.)
-        ui.horizontal(|ui| ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if active && ui.button("\u{2716}").on_hover_text("Clear search (Esc)").clicked() {
-                search.clear();
-            }
-            let hint = format!("\u{1F50D} Search {}  (Ctrl+F)", self.library.tree.root_label());
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut search.query)
-                    .id(egui::Id::new(SEARCH_BOX))
-                    .hint_text(hint)
-                    .desired_width(ui.available_width()),
-            );
-            if resp.changed() {
-                search.edited(now);
-            }
-            if resp.lost_focus() {
-                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    search.submit();
-                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if active
+                    && ui
+                        .button("\u{2716}")
+                        .on_hover_text("Clear search (Esc)")
+                        .clicked()
+                {
                     search.clear();
                 }
-            }
-        }));
+                let hint = format!(
+                    "\u{1F50D} Search {}  (Ctrl+F)",
+                    self.library.tree.root_label()
+                );
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut search.query)
+                        .id(egui::Id::new(SEARCH_BOX))
+                        .hint_text(hint)
+                        .desired_width(ui.available_width()),
+                );
+                if resp.changed() {
+                    search.edited(now);
+                }
+                if resp.lost_focus() {
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        search.submit();
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        search.clear();
+                    }
+                }
+            })
+        });
     }
 
     fn show_folder_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -664,7 +761,11 @@ impl UnAmpApp {
 
         ui.horizontal(|ui| {
             if searching {
-                ui.label(egui::RichText::new(format!("In {}", self.library.tree.root_label())).strong().size(16.0));
+                ui.label(
+                    egui::RichText::new(format!("In {}", self.library.tree.root_label()))
+                        .strong()
+                        .size(16.0),
+                );
             } else {
                 let name = self
                     .library
@@ -680,15 +781,20 @@ impl UnAmpApp {
                 ui.add_enabled_ui(has_tracks, |ui| {
                     ui.menu_button(format!("\u{2795} Add {what} \u{23F7}"), |ui| {
                         if ui.button("to queue").clicked() {
-                            self.playlist.add_to_queue(self.library.visible_tracks().iter().cloned());
+                            self.playlist
+                                .add_to_queue(self.library.visible_tracks().iter().cloned());
                         }
                         if ui.button("to playlist").clicked() {
-                            self.playlist.append(self.library.visible_tracks().iter().cloned());
+                            self.playlist
+                                .append(self.library.visible_tracks().iter().cloned());
                         }
                     });
                 });
                 if ui
-                    .add_enabled(has_tracks, egui::Button::new(format!("\u{25B6} Play {what}")))
+                    .add_enabled(
+                        has_tracks,
+                        egui::Button::new(format!("\u{25B6} Play {what}")),
+                    )
                     .clicked()
                 {
                     self.play_from_folder(0, ctx);
@@ -778,12 +884,20 @@ impl UnAmpApp {
             ui.label(egui::RichText::new("Playlist").strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add_enabled(!self.playlist.tracks().is_empty(), egui::Button::new("Clear"))
+                    .add_enabled(
+                        !self.playlist.tracks().is_empty(),
+                        egui::Button::new("Clear"),
+                    )
                     .clicked()
                 {
                     self.playlist.clear();
                 }
-                let total: Duration = self.playlist.tracks().iter().filter_map(|t| t.duration()).sum();
+                let total: Duration = self
+                    .playlist
+                    .tracks()
+                    .iter()
+                    .filter_map(|t| t.duration())
+                    .sum();
                 ui.label(
                     egui::RichText::new(format!(
                         "{} tracks, {}",
@@ -809,44 +923,61 @@ impl UnAmpApp {
         let output = egui::ScrollArea::vertical()
             .id_salt("playlist_rows")
             .auto_shrink([false, false])
-            .show_rows(ui, library::ROW_HEIGHT, self.playlist.tracks().len(), |ui, range| {
-                for index in range {
-                    let track = &self.playlist.tracks()[index];
-                    let title = with_queue_marker(self.playlist.queue_position(&track.path), track.title());
-                    let resp = library::track_row(
-                        ui,
-                        index,
-                        &title,
-                        track.duration(),
-                        playing && playing_index == Some(index),
-                        self.reorder.is_dragging(DragList::Playlist, index),
-                        egui::Sense::click_and_drag(),
-                    );
-                    self.reorder.row_response(ui, DragList::Playlist, index, &resp);
-                    if resp.double_clicked() {
-                        action = Some(PlaylistAction::Play(index));
-                    }
-                    resp.context_menu(|ui| {
-                        if ui.button("\u{25B6} Play").clicked() {
+            .show_rows(
+                ui,
+                library::ROW_HEIGHT,
+                self.playlist.tracks().len(),
+                |ui, range| {
+                    for index in range {
+                        let track = &self.playlist.tracks()[index];
+                        let title = with_queue_marker(
+                            self.playlist.queue_position(&track.path),
+                            track.title(),
+                        );
+                        let resp = library::track_row(
+                            ui,
+                            index,
+                            &title,
+                            track.duration(),
+                            playing && playing_index == Some(index),
+                            self.reorder.is_dragging(DragList::Playlist, index),
+                            egui::Sense::click_and_drag(),
+                        );
+                        self.reorder
+                            .row_response(ui, DragList::Playlist, index, &resp);
+                        if resp.double_clicked() {
                             action = Some(PlaylistAction::Play(index));
                         }
-                        if ui.button(library::PLAY_NEXT).clicked() {
-                            action = Some(PlaylistAction::PlayNext(index));
-                        }
-                        if ui.button(library::ADD_TO_QUEUE).clicked() {
-                            action = Some(PlaylistAction::AddToQueue(index));
-                        }
-                        if ui.button("\u{2796} Remove").clicked() {
-                            action = Some(PlaylistAction::Remove(index));
-                        }
-                    });
-                }
-                if let Some(dir) = self.reorder.edge_scroll(ui, DragList::Playlist, ui.clip_rect(), library::ROW_HEIGHT) {
-                    ui.scroll_with_delta(egui::vec2(0.0, dir * 6.0));
-                }
-            });
+                        resp.context_menu(|ui| {
+                            if ui.button("\u{25B6} Play").clicked() {
+                                action = Some(PlaylistAction::Play(index));
+                            }
+                            if ui.button(library::PLAY_NEXT).clicked() {
+                                action = Some(PlaylistAction::PlayNext(index));
+                            }
+                            if ui.button(library::ADD_TO_QUEUE).clicked() {
+                                action = Some(PlaylistAction::AddToQueue(index));
+                            }
+                            if ui.button("\u{2796} Remove").clicked() {
+                                action = Some(PlaylistAction::Remove(index));
+                            }
+                        });
+                    }
+                    if let Some(dir) = self.reorder.edge_scroll(
+                        ui,
+                        DragList::Playlist,
+                        ui.clip_rect(),
+                        library::ROW_HEIGHT,
+                    ) {
+                        ui.scroll_with_delta(egui::vec2(0.0, dir * 6.0));
+                    }
+                },
+            );
         let line = ui.visuals().selection.bg_fill;
-        if let Some((from, to)) = self.reorder.finish(ui, DragList::Playlist, output.inner_rect, line) {
+        if let Some((from, to)) =
+            self.reorder
+                .finish(ui, DragList::Playlist, output.inner_rect, line)
+        {
             action = Some(PlaylistAction::Move { from, to });
         }
         if let Some(action) = action {
@@ -857,7 +988,9 @@ impl UnAmpApp {
     /// The up-next queue, above the playlist while it has anything in it.
     fn show_up_next(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!("Up next ({})", self.playlist.queue().len())).strong());
+            ui.label(
+                egui::RichText::new(format!("Up next ({})", self.playlist.queue().len())).strong(),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Clear queue").clicked() {
                     self.playlist.clear_queue();
@@ -906,12 +1039,20 @@ impl UnAmpApp {
                         }
                     });
                 }
-                if let Some(dir) = self.reorder.edge_scroll(ui, DragList::Queue, ui.clip_rect(), library::ROW_HEIGHT) {
+                if let Some(dir) = self.reorder.edge_scroll(
+                    ui,
+                    DragList::Queue,
+                    ui.clip_rect(),
+                    library::ROW_HEIGHT,
+                ) {
                     ui.scroll_with_delta(egui::vec2(0.0, dir * 6.0));
                 }
             });
         let line = ui.visuals().selection.bg_fill;
-        if let Some((from, to)) = self.reorder.finish(ui, DragList::Queue, output.inner_rect, line) {
+        if let Some((from, to)) = self
+            .reorder
+            .finish(ui, DragList::Queue, output.inner_rect, line)
+        {
             self.playlist.move_in_queue(from, to);
         }
 
@@ -959,8 +1100,13 @@ impl UnAmpApp {
 
 impl UnAmpApp {
     fn show_classic(&mut self, ctx: &egui::Context, skin: &mut ClassicSkin, place: ClassicPlace) {
-        let title = self.now_playing_title().unwrap_or_else(|| "UnAmp".to_string());
-        let info = self.now_info.as_ref().filter(|_| self.engine.current().is_some());
+        let title = self
+            .now_playing_title()
+            .unwrap_or_else(|| "UnAmp".to_string());
+        let info = self
+            .now_info
+            .as_ref()
+            .filter(|_| self.engine.current().is_some());
         let (bars, peaks) = self.visualizer.levels();
         let queued: Vec<Option<usize>> = self
             .playlist
@@ -977,12 +1123,19 @@ impl UnAmpApp {
             eq_open: self.config.show_equalizer,
             pl_open: self.config.show_playlist,
             eq: self.eq.snapshot(),
+            eq_profiles: &self.eq_profiles,
+            eq_profile: self.config.eq_profile.as_deref(),
             bars,
             peaks,
             tracks: self.playlist.tracks(),
             current: self.playlist.playing_index(),
             queued: &queued,
-            total: self.playlist.tracks().iter().filter_map(|t| t.duration()).sum(),
+            total: self
+                .playlist
+                .tracks()
+                .iter()
+                .filter_map(|t| t.duration())
+                .sum(),
             time: ctx.input(|i| i.time),
         };
 
@@ -999,7 +1152,11 @@ impl UnAmpApp {
         };
         let mut snapper = std::mem::take(&mut self.snapper);
         let mut y = 0.0;
-        let mut window = |id: &str, default_y: f32, size: egui::Vec2, ctx: &egui::Context, add: &mut dyn FnMut(&mut egui::Ui)| {
+        let mut window = |id: &str,
+                          default_y: f32,
+                          size: egui::Vec2,
+                          ctx: &egui::Context,
+                          add: &mut dyn FnMut(&mut egui::Ui)| {
             let size = size * classic::SCALE;
             let window = egui::Window::new(id)
                 .title_bar(false)
@@ -1008,26 +1165,48 @@ impl UnAmpApp {
                 .fixed_size(size)
                 .constrain(false);
             if tiled {
-                window.id(egui::Id::new(id).with("tiled")).fixed_pos(origin + egui::vec2(0.0, y)).show(ctx, |ui| add(ui));
+                window
+                    .id(egui::Id::new(id).with("tiled"))
+                    .fixed_pos(origin + egui::vec2(0.0, y))
+                    .show(ctx, |ui| add(ui));
                 y += size.y;
                 return;
             }
             let id = egui::Id::new(id);
-            let window = snapper.prepare(id, window.id(id).default_pos(origin + egui::vec2(0.0, default_y)));
+            let window = snapper.prepare(
+                id,
+                window
+                    .id(id)
+                    .default_pos(origin + egui::vec2(0.0, default_y)),
+            );
             if let Some(shown) = window.show(ctx, |ui| add(ui)) {
-                snapper.shown(layout::Shown { id, rect: shown.response.rect, resizable: false });
+                snapper.shown(layout::Shown {
+                    id,
+                    rect: shown.response.rect,
+                    resizable: false,
+                });
             }
         };
         let row = classic::MAIN_SIZE.y * classic::SCALE;
         if self.config.show_player {
-            window("classic_player", 0.0, classic::MAIN_SIZE, ctx, &mut |ui| classic::show_player(ui, skin, &view, &mut actions));
+            window("classic_player", 0.0, classic::MAIN_SIZE, ctx, &mut |ui| {
+                classic::show_player(ui, skin, &view, &mut actions)
+            });
         }
         if self.config.show_equalizer {
-            window("classic_equalizer", row, classic::EQ_SIZE, ctx, &mut |ui| classic::show_eq(ui, skin, &view, &mut actions));
+            window("classic_equalizer", row, classic::EQ_SIZE, ctx, &mut |ui| {
+                classic::show_eq(ui, skin, &view, &mut actions)
+            });
         }
         if self.config.show_playlist {
             let reorder = &mut self.reorder;
-            window("classic_playlist", row * 2.0, classic::PLAYLIST_SIZE, ctx, &mut |ui| classic::show_playlist(ui, skin, &view, reorder, &mut actions));
+            window(
+                "classic_playlist",
+                row * 2.0,
+                classic::PLAYLIST_SIZE,
+                ctx,
+                &mut |ui| classic::show_playlist(ui, skin, &view, reorder, &mut actions),
+            );
         }
         drop(view);
         self.snapper = snapper;
@@ -1066,7 +1245,9 @@ impl UnAmpApp {
         if let Some(dir) = skin::user_skins_dir() {
             if ui
                 .button("Copy built-in skins to folder")
-                .on_hover_text("Puts editable copies in the skins folder; never overwrites existing files")
+                .on_hover_text(
+                    "Puts editable copies in the skins folder; never overwrites existing files",
+                )
                 .clicked()
             {
                 self.skin_notice = Some(match skin::export_built_ins(&dir) {
@@ -1139,7 +1320,10 @@ impl UnAmpApp {
     fn mpris_state(&self) -> (mpris::State, i64) {
         let status = self.status();
         let state = status.state;
-        let current = self.engine.current().filter(|_| state != PlayState::Stopped);
+        let current = self
+            .engine
+            .current()
+            .filter(|_| state != PlayState::Stopped);
         let info = self.now_info.as_ref();
         let has_lists = !self.playlist.tracks().is_empty() || !self.playlist.queue().is_empty();
         let playback = match state {
@@ -1153,10 +1337,20 @@ impl UnAmpApp {
         let mpris_state = mpris::State {
             status: playback,
             track_id: current.map(|_| format!("/org/unamp/track/{}", self.track_serial)),
-            title: current.map(|p| info.and_then(|i| i.title.clone()).unwrap_or_else(|| metadata::file_stem(p))),
-            artist: info.and_then(|i| i.artist.clone()).filter(|_| current.is_some()),
-            album: info.and_then(|i| i.album.clone()).filter(|_| current.is_some()),
-            length_us: status.duration.filter(|_| current.is_some()).map(|d| d.as_micros() as i64),
+            title: current.map(|p| {
+                info.and_then(|i| i.title.clone())
+                    .unwrap_or_else(|| metadata::file_stem(p))
+            }),
+            artist: info
+                .and_then(|i| i.artist.clone())
+                .filter(|_| current.is_some()),
+            album: info
+                .and_then(|i| i.album.clone())
+                .filter(|_| current.is_some()),
+            length_us: status
+                .duration
+                .filter(|_| current.is_some())
+                .map(|d| d.as_micros() as i64),
             art_url: self.art_url.clone().filter(|_| current.is_some()),
             volume: status.volume as f64,
             shuffle: status.shuffle,
@@ -1185,13 +1379,21 @@ impl UnAmpApp {
 
     /// The current track's waveform, decoded on demand while this window is open.
     fn show_waveform(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let Some(path) = self.engine.current().filter(|_| self.engine.state() != PlayState::Stopped) else {
+        let Some(path) = self
+            .engine
+            .current()
+            .filter(|_| self.engine.state() != PlayState::Stopped)
+        else {
             ui.centered_and_justified(|ui| ui.weak("Play something to see its waveform"));
             return;
         };
         let wf = self.waveforms.get(path, ctx);
         let wf = wf.lock().unwrap_or_else(|e| e.into_inner());
-        let total = self.engine.duration().map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let total = self
+            .engine
+            .duration()
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
 
         ui.horizontal(|ui| {
             let title = self.now_playing_title().unwrap_or_default();
@@ -1200,7 +1402,11 @@ impl UnAmpApp {
                 if let Some(err) = &wf.error {
                     ui.colored_label(ui.visuals().error_fg_color, format!("Can't draw: {err}"));
                 } else if !wf.done {
-                    let pct = if total > 0.0 { (wf.decoded_secs() / total * 100.0).min(99.0) } else { 0.0 };
+                    let pct = if total > 0.0 {
+                        (wf.decoded_secs() / total * 100.0).min(99.0)
+                    } else {
+                        0.0
+                    };
                     ui.weak(format!("Reading track… {pct:.0}%"));
                     ui.spinner();
                 }
@@ -1265,7 +1471,11 @@ impl UnAmpApp {
         }
         // Also on the first frame: the desktop's setting may have arrived
         // after the palette was first built.
-        let current = self.skins.iter().find(|s| s.name == self.config.skin).cloned();
+        let current = self
+            .skins
+            .iter()
+            .find(|s| s.name == self.config.skin)
+            .cloned();
         self.palette = current.unwrap_or_else(Skin::default_skin).apply(ctx);
         self.frame_theme = Some(theme);
         ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(match theme {
@@ -1286,40 +1496,68 @@ impl UnAmpApp {
         let area = desktop.shrink(TILE_GAP);
         let column = match &self.classic {
             Some(_) => classic::MAIN_SIZE.x * classic::SCALE,
-            None => STACK_WIDTH + egui::Frame::window(&ctx.global_style()).total_margin().sum().x,
+            None => {
+                STACK_WIDTH
+                    + egui::Frame::window(&ctx.global_style())
+                        .total_margin()
+                        .sum()
+                        .x
+            }
         };
-        let stack_open = self.config.show_player || self.config.show_equalizer || self.config.show_playlist;
+        let stack_open =
+            self.config.show_player || self.config.show_equalizer || self.config.show_playlist;
         let right = egui::Rect::from_min_max(
-            egui::pos2(if stack_open { area.left() + column + TILE_GAP } else { area.left() }, area.top()),
+            egui::pos2(
+                if stack_open {
+                    area.left() + column + TILE_GAP
+                } else {
+                    area.left()
+                },
+                area.top(),
+            ),
             area.max,
         );
 
         // Default layout: the classic stack on the left, library on the right.
         // egui remembers where the user moves and resizes floating windows.
         if let Some(mut skin) = self.classic.take() {
-            let place = if tiled { ClassicPlace::Tiled(area.min) } else { ClassicPlace::Floating(egui::pos2(left, top)) };
+            let place = if tiled {
+                ClassicPlace::Tiled(area.min)
+            } else {
+                ClassicPlace::Floating(egui::pos2(left, top))
+            };
             self.show_classic(ctx, &mut skin, place);
             self.classic = Some(skin);
         } else {
             let mut y = area.top();
             let mut open = self.config.show_player;
-            let window = egui::Window::new("UnAmp").open(&mut open).resizable(false);
+            let window = egui::Window::new("Player").open(&mut open).resizable(false);
             let window = match tiled {
                 true => pinned(window, ctx).fixed_pos(area.left_top()),
                 false => window.default_pos([left, top]).constrain_to(desktop),
             };
-            if let Some(rect) = self.show_window(ctx, "player_window", window, false, |app, ui| app.show_player(ui)) {
+            if let Some(rect) = self.show_window(ctx, "player_window", window, false, |app, ui| {
+                app.show_player(ui)
+            }) {
                 y = rect.bottom() + TILE_GAP;
             }
             self.config.show_player = open;
 
             let mut open = self.config.show_equalizer;
-            let window = egui::Window::new("Equalizer").open(&mut open).resizable(false);
+            let window = egui::Window::new("Equalizer")
+                .open(&mut open)
+                .resizable(false);
             let window = match tiled {
                 true => pinned(window, ctx).fixed_pos([area.left(), y]),
-                false => window.default_pos([left, top + 200.0]).constrain_to(desktop),
+                false => window
+                    .default_pos([left, top + 200.0])
+                    .constrain_to(desktop),
             };
-            if let Some(rect) = self.show_window(ctx, "equalizer_window", window, false, |app, ui| app.show_equalizer(ui)) {
+            if let Some(rect) =
+                self.show_window(ctx, "equalizer_window", window, false, |app, ui| {
+                    app.show_equalizer(ui)
+                })
+            {
                 y = rect.bottom() + TILE_GAP;
             }
             self.config.show_equalizer = open;
@@ -1340,26 +1578,38 @@ impl UnAmpApp {
                     .min_size([320.0, 120.0])
                     .constrain_to(desktop),
             };
-            self.show_window(ctx, "playlist_window", window, true, |app, ui| app.show_playlist_view(ui, ctx));
+            self.show_window(ctx, "playlist_window", window, true, |app, ui| {
+                app.show_playlist_view(ui, ctx)
+            });
             self.config.show_playlist = open;
         }
 
         // Tiled: the library above, the waveform below, split by a handle
         // in the gap between them. Either one alone takes the whole side.
-        let (library_rect, waveform_rect) = match (self.config.show_library, self.config.show_waveform) {
-            (true, true) => {
-                let height = self.config.tile_waveform_height.clamp(110.0, (right.height() - 240.0 - TILE_GAP).max(110.0));
-                let split = right.bottom() - height - TILE_GAP;
-                if tiled {
-                    self.split_handle(ctx, egui::Rect::from_x_y_ranges(right.x_range(), split..=split + TILE_GAP));
+        let (library_rect, waveform_rect) =
+            match (self.config.show_library, self.config.show_waveform) {
+                (true, true) => {
+                    let height = self
+                        .config
+                        .tile_waveform_height
+                        .clamp(110.0, (right.height() - 240.0 - TILE_GAP).max(110.0));
+                    let split = right.bottom() - height - TILE_GAP;
+                    if tiled {
+                        self.split_handle(
+                            ctx,
+                            egui::Rect::from_x_y_ranges(right.x_range(), split..=split + TILE_GAP),
+                        );
+                    }
+                    (
+                        egui::Rect::from_min_max(right.min, egui::pos2(right.right(), split)),
+                        egui::Rect::from_min_max(
+                            egui::pos2(right.left(), split + TILE_GAP),
+                            right.max,
+                        ),
+                    )
                 }
-                (
-                    egui::Rect::from_min_max(right.min, egui::pos2(right.right(), split)),
-                    egui::Rect::from_min_max(egui::pos2(right.left(), split + TILE_GAP), right.max),
-                )
-            }
-            _ => (right, right),
-        };
+                _ => (right, right),
+            };
 
         // Off by default; Reset layout leaves it as it is.
         let mut open = self.config.show_waveform;
@@ -1373,7 +1623,9 @@ impl UnAmpApp {
                 .min_size([240.0, 110.0])
                 .constrain_to(desktop),
         };
-        self.show_window(ctx, "waveform_window", window, true, |app, ui| app.show_waveform(ui, ctx));
+        self.show_window(ctx, "waveform_window", window, true, |app, ui| {
+            app.show_waveform(ui, ctx)
+        });
         self.config.show_waveform = open;
 
         let mut open = self.config.show_library;
@@ -1387,7 +1639,9 @@ impl UnAmpApp {
                 .min_size([420.0, 240.0])
                 .constrain_to(desktop),
         };
-        self.show_window(ctx, "library_window", window, true, |app, ui| app.show_library(ui, ctx));
+        self.show_window(ctx, "library_window", window, true, |app, ui| {
+            app.show_library(ui, ctx)
+        });
         self.config.show_library = open;
     }
 
@@ -1402,7 +1656,8 @@ impl UnAmpApp {
                 if resp.hovered() || resp.dragged() {
                     let stroke = ui.visuals().widgets.hovered.fg_stroke;
                     let y = rect.center().y;
-                    ui.painter().hline(rect.center().x - 20.0..=rect.center().x + 20.0, y, stroke);
+                    ui.painter()
+                        .hline(rect.center().x - 20.0..=rect.center().x + 20.0, y, stroke);
                 }
                 if resp.dragged() {
                     self.config.tile_waveform_height -= resp.drag_delta().y;
@@ -1426,12 +1681,19 @@ impl UnAmpApp {
         let window = window.collapsible(false);
         if self.config.tile_windows {
             let id = egui::Id::new(id).with("tiled");
-            return window.id(id).show(ctx, |ui| add(self, ui)).map(|shown| shown.response.rect);
+            return window
+                .id(id)
+                .show(ctx, |ui| add(self, ui))
+                .map(|shown| shown.response.rect);
         }
         let id = egui::Id::new(id);
         let window = self.snapper.prepare(id, window.id(id));
         let shown = window.show(ctx, |ui| add(self, ui))?;
-        self.snapper.shown(layout::Shown { id, rect: shown.response.rect, resizable });
+        self.snapper.shown(layout::Shown {
+            id,
+            rect: shown.response.rect,
+            resizable,
+        });
         Some(shown.response.rect)
     }
 
@@ -1461,33 +1723,34 @@ impl UnAmpApp {
         ui.set_width(STACK_WIDTH);
         let before = self.eq.snapshot();
         let mut snap = before;
+        let mut commands = Vec::new();
 
         ui.horizontal(|ui| {
             ui.toggle_value(&mut snap.enabled, "ON")
                 .on_hover_text("Enable the equalizer");
-            let preset = eq::PRESETS
-                .iter()
-                .find(|(_, gains)| *gains == snap.gains)
-                .map(|(name, _)| *name)
-                .unwrap_or("Custom");
-            egui::ComboBox::from_id_salt("eq_preset")
-                .selected_text(preset)
-                .show_ui(ui, |ui| {
-                    for (name, gains) in eq::PRESETS {
-                        if ui.selectable_label(snap.gains == *gains, *name).clicked() {
-                            snap.gains = *gains;
-                            snap.enabled = true;
-                        }
-                    }
-                });
+            let loaded = self.config.eq_profile.as_deref();
+            let current = self.eq_profiles.label(loaded, &snap);
+            let button = ui
+                .button(format!("{current} ⏷"))
+                .on_hover_text("Presets and saved profiles");
+            egui::Popup::menu(&button)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| eq_profiles::menu(ui, &self.eq_profiles, loaded, &mut snap, &mut commands));
             if ui.button("Reset").clicked() {
-                snap.gains = [0.0; eq::BANDS];
-                snap.preamp = 0.0;
+                eq_profiles::reset(&mut snap, &mut commands);
             }
         });
         ui.add_space(4.0);
         let sample_rate = self.engine.tap().lock().map(|t| t.sample_rate).unwrap_or(0);
-        eq_curve(ui, &snap, if sample_rate > 0 { sample_rate as f32 } else { 44_100.0 });
+        eq_curve(
+            ui,
+            &snap,
+            if sample_rate > 0 {
+                sample_rate as f32
+            } else {
+                44_100.0
+            },
+        );
         ui.add_space(4.0);
 
         ui.horizontal(|ui| {
@@ -1498,9 +1761,12 @@ impl UnAmpApp {
             }
         });
 
+        let ctx = ui.ctx().clone();
         if snap != before {
-            let ctx = ui.ctx().clone();
             self.apply(Command::SetEq(snap), &ctx);
+        }
+        for command in commands {
+            self.apply(command, &ctx);
         }
     }
 }
@@ -1529,20 +1795,33 @@ fn eq_slider(ui: &mut egui::Ui, value: &mut f32, label: &str) {
 
 /// The equalizer's actual frequency response, 20 Hz – 20 kHz on a log axis.
 fn eq_curve(ui: &mut egui::Ui, snap: &EqSnapshot, sample_rate: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 56.0), egui::Sense::hover());
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 56.0), egui::Sense::hover());
     let visuals = ui.visuals();
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, visuals.widgets.inactive.corner_radius, visuals.extreme_bg_color);
+    painter.rect_filled(
+        rect,
+        visuals.widgets.inactive.corner_radius,
+        visuals.extreme_bg_color,
+    );
     // Overlapping boosted bands sum past a single band's range.
     let range_db = eq::MAX_DB * 2.0;
     let y_for = |db: f32| rect.center().y - (db / range_db).clamp(-1.0, 1.0) * rect.height() / 2.0;
-    painter.hline(rect.x_range(), y_for(0.0), visuals.widgets.noninteractive.bg_stroke);
+    painter.hline(
+        rect.x_range(),
+        y_for(0.0),
+        visuals.widgets.noninteractive.bg_stroke,
+    );
 
     let (lo, hi) = (20f32.ln(), 20_000f32.ln());
     let x_for = |f: f32| rect.left() + (f.ln() - lo) / (hi - lo) * rect.width();
     let at = |i: usize| eq::graph_freq(i as f32 / 96.0);
     for f in eq::FREQS {
-        painter.vline(x_for(f), rect.y_range(), egui::Stroke::new(1.0, visuals.faint_bg_color));
+        painter.vline(
+            x_for(f),
+            rect.y_range(),
+            egui::Stroke::new(1.0, visuals.faint_bg_color),
+        );
     }
     let points: Vec<egui::Pos2> = (0..=96)
         .map(|i| {
@@ -1564,7 +1843,10 @@ fn marquee(ui: &mut egui::Ui, text: &str, scrolling: bool, color: egui::Color32)
     let font = egui::FontId::proportional(16.0);
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, color);
     let height = galley.size().y;
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
     let painter = ui.painter_at(rect);
 
     if galley.size().x <= rect.width() {
@@ -1665,7 +1947,11 @@ impl eframe::App for UnAmpApp {
         }
 
         let custom_frame = !self.config.system_title_bar;
-        let radius = if custom_frame { frame::corner_radius(ctx, self.palette.frame.radius) } else { 0 };
+        let radius = if custom_frame {
+            frame::corner_radius(ctx, self.palette.frame.radius)
+        } else {
+            0
+        };
         let title = self.window_title.clone();
         let frame_style = self.palette.frame;
         egui::Panel::top("menu")
@@ -1732,23 +2018,43 @@ impl eframe::App for UnAmpApp {
             .frame(
                 egui::Frame::side_top_panel(ui.style())
                     .inner_margin(egui::Margin::symmetric(10, 4))
-                    .corner_radius(egui::CornerRadius { nw: 0, ne: 0, sw: radius, se: radius }),
+                    .corner_radius(egui::CornerRadius {
+                        nw: 0,
+                        ne: 0,
+                        sw: radius,
+                        se: radius,
+                    }),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Window size in physical pixels, styled like the version label.
                     let size = ctx.content_rect().size() * ctx.pixels_per_point();
                     ui.label(
-                        egui::RichText::new(format!("{} \u{00D7} {}", size.x.round(), size.y.round()))
-                            .weak()
-                            .small(),
+                        egui::RichText::new(format!(
+                            "{} \u{00D7} {}",
+                            size.x.round(),
+                            size.y.round()
+                        ))
+                        .weak()
+                        .small(),
                     )
                     .on_hover_text("Window size in pixels");
-                    let error = self.engine.error.as_ref().or(self.session_error.as_ref());
+                    let error = self
+                        .engine
+                        .error
+                        .as_ref()
+                        .or(self.session_error.as_ref())
+                        .or(self.eq_profiles_error.as_ref());
                     if error.is_some() || self.engine.state() == PlayState::Loading {
                         ui.separator();
                     }
-                    if let Some(err) = self.engine.error.as_ref().or(self.session_error.as_ref()) {
+                    if let Some(err) = self
+                        .engine
+                        .error
+                        .as_ref()
+                        .or(self.session_error.as_ref())
+                        .or(self.eq_profiles_error.as_ref())
+                    {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     } else if self.engine.state() == PlayState::Loading {
                         ui.spinner();
@@ -1785,7 +2091,8 @@ impl eframe::App for UnAmpApp {
             .response
             .rect;
         self.show_windows(ctx, desktop);
-        self.snapper.finish(ctx, desktop.min + egui::vec2(10.0, 10.0), snapping);
+        self.snapper
+            .finish(ctx, desktop.min + egui::vec2(10.0, 10.0), snapping);
 
         if custom_frame {
             frame::edges(ctx, radius, self.palette.frame.border);
@@ -1815,7 +2122,6 @@ impl eframe::App for UnAmpApp {
         self.config.save();
     }
 }
-
 
 /// Where the classic-skin windows go.
 enum ClassicPlace {
@@ -1857,7 +2163,11 @@ mod tests {
     use super::*;
 
     fn config(volume: f32, muted: bool) -> AppConfig {
-        AppConfig { volume, muted, ..Default::default() }
+        AppConfig {
+            volume,
+            muted,
+            ..Default::default()
+        }
     }
 
     #[test]

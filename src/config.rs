@@ -40,6 +40,9 @@ pub struct AppConfig {
     pub eq_enabled: bool,
     pub eq_preamp: f32,
     pub eq_bands: [f32; eq::BANDS],
+    /// The built-in preset or `eq.toml` profile last loaded or saved; the
+    /// values above may have moved from it since (see ADR-0026).
+    pub eq_profile: Option<String>,
     /// Skin name, as in the skin file's `name`; "Default" is stock egui.
     pub skin: String,
     /// Which windows are open; their positions and sizes are kept by egui.
@@ -75,6 +78,7 @@ impl Default for AppConfig {
             eq_enabled: false,
             eq_preamp: 0.0,
             eq_bands: [0.0; eq::BANDS],
+            eq_profile: None,
             skin: crate::skin::DEFAULT_SKIN.to_string(),
             show_player: true,
             show_equalizer: true,
