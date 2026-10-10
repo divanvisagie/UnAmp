@@ -191,4 +191,4 @@ link update is a commit on `master`.
 
 ## License
 
-GPL-2.0-only. Not affiliated with Winamp or Llama Group.
+BSD-3-Clause. Not affiliated with Winamp or Llama Group.
