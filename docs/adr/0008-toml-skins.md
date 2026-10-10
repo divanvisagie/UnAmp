@@ -5,7 +5,8 @@ Date: 2026-10-09
 ## Status
 
 Accepted. Ruling out bitmap skins is superseded by [ADR-0010](0010-classic-wsz-renderer.md)
-for classic `.wsz` skins; TOML colour skins are unchanged.
+for classic `.wsz` skins. The TOML layout is superseded by the suite theme format,
+[ADR-0024](0024-suite-theme-format.md).
 
 ## Context
 

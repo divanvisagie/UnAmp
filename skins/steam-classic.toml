@@ -1,40 +1,65 @@
 # Steam Classic — the olive-green VGUI look of the 2003–2008 Steam client.
 #
-# This file doubles as the reference for the skin format. Copy it to
-# ~/.config/unamp/skins/<anything>.toml, change `name`, and pick it from the
-# Skins menu. Every colour is optional: anything left out keeps egui's
-# default for the `base` theme. Colours are "#RRGGBB" or "#RRGGBBAA".
+# This file doubles as the reference for the theme format (see
+# docs/skinning.md). Copy it to ~/.config/unamp/skins/<anything>.toml, change
+# `name`, and pick it from the Skins menu. Every colour is optional: anything
+# left out keeps egui's default for the `base` theme. Colours are "#RRGGBB"
+# or "#RRGGBBAA".
 
+# Theme format version. Files without it are the old skin format.
+format = 1
 name = "Steam Classic"
 author = "UnAmp"
 # Which egui theme the skin starts from: "dark" or "light".
 base = "dark"
-# Corner rounding in pixels for windows, menus and widgets (VGUI was square).
+# Corner rounding in pixels for panels, menus and controls (VGUI was square).
 corner_radius = 0
 # Drop shadows under windows and popups.
 shadows = false
 
+# The base palette, shared by every app that reads this format.
 [colors]
-background = "#4C5844"   # windows and panels
-surface = "#3E4637"      # inset areas: text fields, lists, scroll tracks
-stripe = "#465040"       # alternate rows in track lists
-border = "#889180"       # window and widget outlines
+background = "#4C5844"   # panels and the windows inside the app
+surface = "#3E4637"      # inset areas: text fields, lists, slider tracks
+surface_alt = "#465040"  # alternate rows in lists
+border = "#889180"       # outlines of windows and panels
 text = "#D8DED3"
-text_strong = "#FFFFFF"  # headings, hovered/pressed widget text
+text_strong = "#FFFFFF"  # headings
 text_weak = "#A0AA95"
 accent = "#958831"       # selection, slider fill, toggles that are on
 accent_text = "#FFFFFF"  # text on top of `accent`
-button = "#4C5844"
-button_hover = "#5A6A50"
-button_active = "#3E4637"
-link = "#C4B550"         # links and the now-playing track
+link = "#C4B550"         # links and the current item
+warning = "#D9B44C"
 error = "#E06C4C"
 
-[player]
+# Buttons, sliders, checkboxes and drop-downs.
+[controls]
+background = "#4C5844"
+hover = "#5A6A50"
+pressed = "#3E4637"
+text = "#D8DED3"
+text_hover = "#FFFFFF"
+
+# The app's own window frame.
+[window]
+title_bar = "#3E4637"
+title_text = "#D8DED3"
+border = "#889180"
+corner_radius = 0        # the whole window's corners
+
+# Minimise, maximise and close, themed apart from [controls].
+[window.controls]
+icon = "#A0AA95"
+icon_hover = "#FFFFFF"
+hover = "#5A6A50"
+pressed = "#2A3125"
+close_hover = "#9C3B24"
+close_icon_hover = "#FFFFFF"
+
+# UnAmp's own parts. Other apps skip this section, and UnAmp skips theirs.
+[app.unamp]
 display = "#2A3125"      # spectrum analyzer and seek-bar background
 time = "#C4B550"         # the big time display
 title = "#D8DED3"        # scrolling song title
-spectrum_low = "#8BA36A"
-spectrum_mid = "#C4B550"
-spectrum_high = "#D9763E"
+spectrum = ["#8BA36A", "#C4B550", "#D9763E"]   # bar colours, bottom to top
 spectrum_peak = "#D8DED3"

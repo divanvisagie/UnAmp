@@ -47,7 +47,7 @@ mechanics of adding one.
 | [0005](0005-reuse-photograph-mount-discovery.md) | Copy Photograph's mount discovery rather than sharing a crate | Proposed |
 | [0006](0006-floating-egui-windows.md) | Use floating egui windows for the player, equalizer, playlist and media library | Accepted |
 | [0007](0007-biquad-equalizer-in-source-chain.md) | Implement the equalizer as peaking biquads in a rodio `Source`, ahead of the visualizer tap | Proposed |
-| [0008](0008-toml-skins.md) | Support skins as TOML files, keeping stock egui as the default | Accepted (bitmap exclusion superseded by [ADR-0010](0010-classic-wsz-renderer.md)) |
+| [0008](0008-toml-skins.md) | Support skins as TOML files, keeping stock egui as the default | Accepted (bitmap exclusion superseded by [ADR-0010](0010-classic-wsz-renderer.md); file layout by [ADR-0024](0024-suite-theme-format.md)) |
 | [0009](0009-convert-winamp-wsz-colours.md) | Convert classic Winamp `.wsz` skins to TOML skins, colours only | Superseded by [ADR-0010](0010-classic-wsz-renderer.md) |
 | [0010](0010-classic-wsz-renderer.md) | Render classic `.wsz` skins pixel-for-pixel in fixed-size windows | Accepted |
 | [0011](0011-built-in-skins-compiled-in-copy-out.md) | Keep built-in skins compiled in, with a non-overwriting "copy to folder" for editing | Accepted |
@@ -63,6 +63,7 @@ mechanics of adding one.
 | [0021](0021-screenshot-mode.md) | Generate the docs screenshot from a fake library, with a screenshot mode in the app | Proposed |
 | [0022](0022-snap-to-grid-and-tiling.md) | Snap floating windows to a grid, or tile them | Accepted (tile drawing superseded by [ADR-0023](0023-tile-with-pinned-windows.md)) |
 | [0023](0023-tile-with-pinned-windows.md) | Tile with the real windows, pinned in place, instead of panels | Accepted |
+| [0024](0024-suite-theme-format.md) | A versioned theme format with shared sections and per-app sections | Proposed |
 
 ## Decision Relationship
 
@@ -103,6 +104,8 @@ flowchart TD
     J --> V
     V --> W[0023: Tiles are pinned windows]
     R --> W
+    H --> X[0024: Suite theme format]
+    T --> X
 ```
 
 ## Revisit Triggers

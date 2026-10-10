@@ -21,6 +21,7 @@ lofty = "0.25.4"
 rodio = { version = "0.22.2", features = ["symphonia-all"] }
 rustfft = "6.4.1"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_ignored = "0.1"
 toml = "1.1.8"
 zbus = "5"
 zip = { version = "9.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }

@@ -1,9 +1,11 @@
 //! UnAmp's own window frame (see ADR-0020): the main window opens without
 //! system decorations, and this draws a title bar holding the menus, the
 //! window title and minimise/maximise/close buttons, plus a one-pixel border
-//! and invisible resize handles along the edges. Everything is painted with
-//! the active egui visuals, so the frame follows the skin and the desktop's
-//! light/dark setting like the rest of the window.
+//! and invisible resize handles along the edges. Its colours come from the
+//! theme's `[window]` section (see ADR-0024), which defaults to the active
+//! egui visuals, so the frame follows the skin and the desktop's light/dark
+//! setting like the rest of the window. The window controls have colours of
+//! their own, apart from the app's buttons.
 //!
 //! Moving and resizing are handed to the compositor (`StartDrag`,
 //! `BeginResize`), so snapping and tiling behave as with a native frame.
@@ -15,6 +17,32 @@ const EDGE: f32 = 5.0;
 /// Corners get a larger grab area than straight edges.
 const CORNER: f32 = 12.0;
 const BUTTON: egui::Vec2 = vec2(30.0, 22.0);
+/// Height of the title bar's row, as in Photograph, whose GTK-style
+/// buttons set it there.
+const ROW_HEIGHT: f32 = 25.0;
+
+/// The frame's colours, resolved from the theme.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FrameStyle {
+    pub title_bar: Color32,
+    pub title_text: Color32,
+    pub border: Color32,
+    /// Corner rounding of the window when it isn't maximised.
+    pub radius: u8,
+    pub controls: WindowControlColors,
+}
+
+/// Minimise, maximise and close.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowControlColors {
+    pub icon: Color32,
+    pub icon_hover: Color32,
+    pub hover: Color32,
+    pub pressed: Color32,
+    pub close_hover: Color32,
+    pub close_icon_hover: Color32,
+    pub radius: egui::CornerRadius,
+}
 
 #[derive(Clone, Copy)]
 enum Button {
@@ -40,7 +68,7 @@ pub fn corner_radius(ctx: &egui::Context, radius: u8) -> u8 {
 /// The title bar: `menus` on the left, `title` centred, and with `custom`
 /// set, window buttons on the right and drag-to-move on the empty space.
 /// With `custom` off the desktop draws the frame and this is a plain menu bar.
-pub fn title_bar(ui: &mut egui::Ui, title: &str, custom: bool, menus: impl FnOnce(&mut egui::Ui)) {
+pub fn title_bar(ui: &mut egui::Ui, style: &FrameStyle, title: &str, custom: bool, menus: impl FnOnce(&mut egui::Ui)) {
     let ctx = ui.ctx().clone();
     let bar = ui.max_rect();
     if custom {
@@ -59,6 +87,7 @@ pub fn title_bar(ui: &mut egui::Ui, title: &str, custom: bool, menus: impl FnOnc
     let mut left_width = 0.0;
     let mut right_width = 0.0;
     ui.horizontal(|ui| {
+        ui.set_min_height(ROW_HEIGHT);
         // Where the menus end: the menu bar itself spans the whole bar.
         let menus_end = egui::MenuBar::new()
             .ui(ui, |ui| {
@@ -70,15 +99,15 @@ pub fn title_bar(ui: &mut egui::Ui, title: &str, custom: bool, menus: impl FnOnc
         if custom {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
-                if button(ui, Button::Close).on_hover_text("Close").clicked() {
+                if button(ui, &style.controls, Button::Close).on_hover_text("Close").clicked() {
                     ctx.send_viewport_cmd(ViewportCommand::Close);
                 }
                 let max = maximized(&ctx);
                 let (kind, tip) = if max { (Button::Restore, "Restore") } else { (Button::Maximize, "Maximise") };
-                if button(ui, kind).on_hover_text(tip).clicked() {
+                if button(ui, &style.controls, kind).on_hover_text(tip).clicked() {
                     ctx.send_viewport_cmd(ViewportCommand::Maximized(!max));
                 }
-                if button(ui, Button::Minimize).on_hover_text("Minimise").clicked() {
+                if button(ui, &style.controls, Button::Minimize).on_hover_text("Minimise").clicked() {
                     ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
                 }
                 right_width = bar.right() - ui.min_rect().left();
@@ -97,7 +126,7 @@ pub fn title_bar(ui: &mut egui::Ui, title: &str, custom: bool, menus: impl FnOnc
             egui::TextStyle::Body,
         );
         let pos = bar.center() - galley.size() / 2.0;
-        ui.painter().galley(pos, galley, ui.visuals().text_color());
+        ui.painter().galley(pos, galley, style.title_text);
     }
 }
 
@@ -115,23 +144,18 @@ fn window_menu(ui: &mut egui::Ui, ctx: &egui::Context) {
     }
 }
 
-fn button(ui: &mut egui::Ui, kind: Button) -> egui::Response {
+fn button(ui: &mut egui::Ui, colors: &WindowControlColors, kind: Button) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(BUTTON, Sense::click());
-    let visuals = ui.visuals();
-    let fg = if resp.hovered() || resp.has_focus() {
-        visuals.strong_text_color()
-    } else {
-        visuals.text_color()
-    };
+    let fg = if resp.hovered() || resp.has_focus() { colors.icon_hover } else { colors.icon };
     let (fg, bg) = match kind {
-        Button::Close if resp.hovered() => (Color32::WHITE, Some(Color32::from_rgb(0xc0, 0x1c, 0x28))),
-        _ if resp.is_pointer_button_down_on() => (fg, Some(visuals.widgets.active.weak_bg_fill)),
-        _ if resp.hovered() => (fg, Some(visuals.widgets.hovered.weak_bg_fill)),
+        Button::Close if resp.hovered() => (colors.close_icon_hover, Some(colors.close_hover)),
+        _ if resp.is_pointer_button_down_on() => (fg, Some(colors.pressed)),
+        _ if resp.hovered() => (fg, Some(colors.hover)),
         _ => (fg, None),
     };
     let painter = ui.painter();
     if let Some(bg) = bg {
-        painter.rect_filled(rect, visuals.widgets.hovered.corner_radius, bg);
+        painter.rect_filled(rect, colors.radius, bg);
     }
     let stroke = Stroke::new(1.2, fg);
     let c = rect.center();
@@ -197,14 +221,13 @@ fn cursor(direction: ResizeDirection) -> CursorIcon {
 
 /// The border and resize handles. Call after everything else is drawn, so
 /// the handles sit above the floating windows along the edges.
-pub fn edges(ctx: &egui::Context, radius: u8) {
+pub fn edges(ctx: &egui::Context, radius: u8, border: Color32) {
     if maximized(ctx) {
         return;
     }
     let window = ctx.content_rect();
     let painter = ctx.layer_painter(egui::LayerId::new(Order::Foreground, Id::new("window_border")));
-    let stroke = ctx.global_style().visuals.window_stroke;
-    painter.rect_stroke(window, radius, Stroke::new(1.0, stroke.color), egui::StrokeKind::Inside);
+    painter.rect_stroke(window, radius, Stroke::new(1.0, border), egui::StrokeKind::Inside);
 
     let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
         return;

@@ -152,8 +152,12 @@ fn hex(c: Color32) -> String {
     format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
 }
 
-/// Writes an UnAmp skin TOML from extracted colours. `name` becomes the
-/// skin's menu name; `source` is noted in the header comment.
+/// The first line of every converted file, so an outdated conversion can
+/// be recognised and redone (see `convert_new_in`).
+const HEADER: &str = "# Converted from the Winamp skin";
+
+/// Writes a theme TOML (format `skin::FORMAT`) from extracted colours.
+/// `name` becomes the skin's menu name; `source` is noted in the header.
 pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
     // Window background: the main window's tone, else the playlist's.
     let background = c.main_tone.or(c.normal_bg);
@@ -162,19 +166,14 @@ pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
 
     let mut out = String::new();
     out.push_str(&format!(
-        "# Converted from the Winamp skin {source:?} by UnAmp.\n\
+        "{HEADER} {source:?} by UnAmp.\n\
          # Only colours carry over; edit freely — this file isn't regenerated\n\
          # while it exists. Delete it and use Skins → Reload to convert again.\n\n"
     ));
+    out.push_str(&format!("format = {}\n", crate::skin::FORMAT));
     out.push_str(&format!("name = {}\n", toml_string(name)));
     out.push_str(&format!("base = \"{}\"\n", if dark { "dark" } else { "light" }));
-    out.push_str("corner_radius = 0\nshadows = false\n");
-    out.push_str(&format!(
-        "# Draw the Player, Equalizer and Playlist from the skin's own bitmaps.\n\
-         # Remove this line to use UnAmp's regular windows in these colours.\n\
-         classic = {}\n\n[colors]\n",
-        toml_string(source)
-    ));
+    out.push_str("corner_radius = 0\nshadows = false\n\n[colors]\n");
 
     let mut line = |key: &str, value: Option<Color32>, note: &str| {
         if let Some(v) = value {
@@ -183,19 +182,32 @@ pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
     };
     line("background", background, "main.bmp average tone");
     line("surface", c.normal_bg, "pledit NormalBG");
-    line("stripe", c.normal_bg.zip(c.normal).map(|(bg, fg)| mix(bg, fg, 0.06)), "NormalBG tinted with Normal");
+    line("surface_alt", c.normal_bg.zip(c.normal).map(|(bg, fg)| mix(bg, fg, 0.06)), "NormalBG tinted with Normal");
     line("border", background.map(|bg| mix(bg, toward, 0.3)), "background, lifted");
     line("text", c.normal, "pledit Normal");
     line("text_strong", c.current, "pledit Current");
     line("text_weak", c.normal.zip(c.normal_bg).map(|(fg, bg)| mix(fg, bg, 0.4)), "Normal faded toward NormalBG");
     line("accent", c.selected_bg, "pledit SelectedBG");
     line("accent_text", c.normal, "pledit Normal");
-    line("button", background, "same as background");
-    line("button_hover", background.map(|bg| mix(bg, toward, 0.12)), "background, lifted");
-    line("button_active", c.normal_bg, "pledit NormalBG");
     line("link", c.current, "pledit Current (now-playing track)");
 
-    out.push_str("\n[player]\n");
+    out.push_str("\n[controls]\n");
+    let mut line = |key: &str, value: Option<Color32>, note: &str| {
+        if let Some(v) = value {
+            out.push_str(&format!("{key} = \"{}\"   # {note}\n", hex(v)));
+        }
+    };
+    line("background", background, "same as the window background");
+    line("hover", background.map(|bg| mix(bg, toward, 0.12)), "background, lifted");
+    line("pressed", c.normal_bg, "pledit NormalBG");
+
+    out.push_str(&format!(
+        "\n[app.unamp]\n\
+         # Draw the Player, Equalizer and Playlist from the skin's own bitmaps.\n\
+         # Remove this line to use UnAmp's regular windows in these colours.\n\
+         classic = {}\n",
+        toml_string(source)
+    ));
     let vis = c.vis.as_deref();
     let mut line = |key: &str, value: Option<Color32>, note: &str| {
         if let Some(v) = value {
@@ -205,10 +217,6 @@ pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
     line("display", vis.map(|v| v[0]), "viscolor 0, analyzer background");
     line("time", c.digits, "numbers.bmp digit colour");
     line("title", c.normal, "pledit Normal");
-    // viscolor 2 is the top of the bars and 17 the bottom.
-    line("spectrum_low", vis.map(|v| v[17]), "viscolor 17");
-    line("spectrum_mid", vis.map(|v| v[8]), "viscolor 8");
-    line("spectrum_high", vis.map(|v| v[2]), "viscolor 2");
     line("spectrum_peak", vis.map(|v| v[23]), "viscolor 23, peak dots");
     if let Some(v) = vis {
         // Every analyzer colour, bottom (viscolor 17) to top (viscolor 2).
@@ -218,12 +226,20 @@ pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
     out
 }
 
+/// A file this converter wrote before the theme format had a version.
+fn is_outdated_conversion(text: &str) -> bool {
+    text.starts_with(HEADER)
+        && toml::from_str::<toml::Table>(text).is_ok_and(|t| !t.contains_key("format"))
+}
+
 fn toml_string(s: &str) -> String {
     toml::Value::String(s.to_string()).to_string()
 }
 
 /// For each `.wsz` in `dir` without a same-named `.toml`, writes one.
-/// Existing TOML files are left alone so hand edits survive.
+/// Existing TOML files are left alone so hand edits survive, except a
+/// conversion in the pre-suite skin format (no `format` key), which is
+/// redone with the old file kept beside it as `.toml.v0`.
 pub fn convert_new_in(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -239,7 +255,15 @@ pub fn convert_new_in(dir: &Path) -> Vec<String> {
         }
         let target: PathBuf = path.with_extension("toml");
         if target.exists() {
-            continue;
+            match std::fs::read_to_string(&target) {
+                Ok(text) if is_outdated_conversion(&text) => {
+                    if let Err(e) = std::fs::rename(&target, target.with_extension("toml.v0")) {
+                        errors.push(format!("{}: {e}", target.display()));
+                        continue;
+                    }
+                }
+                _ => continue,
+            }
         }
         let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let name = path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
@@ -338,9 +362,9 @@ mod tests {
         let skin = crate::skin::Skin::parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
         assert_eq!(skin.name, "Squall \"Leonhart\"");
         assert_eq!(skin.base, Some(crate::skin::Base::Dark));
-        assert_eq!(skin.player.spectrum_high.unwrap().0, Color32::from_rgb(239, 49, 16));
-        assert_eq!(skin.classic.as_deref(), Some("Squall.wsz"));
-        let spectrum = skin.player.spectrum.unwrap();
+        assert!(skin.warnings.is_empty(), "{:?}", skin.warnings);
+        assert_eq!(skin.classic(), Some("Squall.wsz"));
+        let spectrum = skin.app.unamp.spectrum.unwrap();
         assert_eq!(spectrum.len(), 16);
         assert_eq!(spectrum[0].0, Color32::from_rgb(24, 132, 8));
         assert_eq!(spectrum[15].0, Color32::from_rgb(239, 49, 16));
@@ -349,7 +373,8 @@ mod tests {
     #[test]
     fn empty_skin_still_converts() {
         let text = to_toml("Bare", "Bare.wsz", &WszColors::default());
-        crate::skin::Skin::parse(&text).unwrap();
+        let skin = crate::skin::Skin::parse(&text).unwrap();
+        assert!(skin.warnings.is_empty(), "{:?}", skin.warnings);
     }
 
     #[test]
@@ -367,6 +392,23 @@ mod tests {
         std::fs::write(&toml_path, "name = \"Edited\"\n").unwrap();
         convert_new_in(&dir);
         assert_eq!(std::fs::read_to_string(&toml_path).unwrap(), "name = \"Edited\"\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_format_conversions_are_redone_with_a_backup() {
+        let dir = std::env::temp_dir().join(format!("unamp-wsz-redo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = wsz(&[("pledit.txt", b"Normal=#00FF00".to_vec())]).into_inner();
+        std::fs::write(dir.join("Squall.wsz"), archive).unwrap();
+        let old = format!("{HEADER} \"Squall.wsz\" by UnAmp.\nname = \"Squall\"\n[player]\ntime = \"#00FF00\"\n");
+        std::fs::write(dir.join("Squall.toml"), &old).unwrap();
+
+        assert!(convert_new_in(&dir).is_empty());
+        let redone = std::fs::read_to_string(dir.join("Squall.toml")).unwrap();
+        assert!(redone.contains("format = 1"), "{redone}");
+        assert_eq!(std::fs::read_to_string(dir.join("Squall.toml.v0")).unwrap(), old);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

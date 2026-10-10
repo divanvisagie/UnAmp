@@ -1584,7 +1584,7 @@ fn marquee(ui: &mut egui::Ui, text: &str, scrolling: bool, color: egui::Color32)
 
 /// Loads the skin's classic `.wsz` (if it names one), noting failures.
 fn load_classic(skin: &Skin, ctx: &egui::Context, errors: &mut Vec<String>) -> Option<ClassicSkin> {
-    let file = skin.classic.as_ref()?;
+    let file = skin.classic()?;
     let path = skin.path.as_ref()?.parent()?.join(file);
     match ClassicSkin::load(&path, ctx) {
         Ok(classic) => Some(classic),
@@ -1665,16 +1665,19 @@ impl eframe::App for UnAmpApp {
         }
 
         let custom_frame = !self.config.system_title_bar;
-        let radius = if custom_frame { frame::corner_radius(ctx, self.palette.window_radius) } else { 0 };
+        let radius = if custom_frame { frame::corner_radius(ctx, self.palette.frame.radius) } else { 0 };
         let title = self.window_title.clone();
+        let frame_style = self.palette.frame;
         egui::Panel::top("menu")
             .frame(
                 egui::Frame::side_top_panel(ui.style())
-                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .fill(frame_style.title_bar)
+                    // Photograph's header-bar padding, so the suite's title bars match.
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .corner_radius(egui::CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 }),
             )
             .show(ui, |ui| {
-                frame::title_bar(ui, &title, custom_frame, |ui| {
+                frame::title_bar(ui, &frame_style, &title, custom_frame, |ui| {
                     ui.menu_button("Windows", |ui| {
                         for (window, label) in [
                             (Window::Player, "Player"),
@@ -1785,7 +1788,7 @@ impl eframe::App for UnAmpApp {
         self.snapper.finish(ctx, desktop.min + egui::vec2(10.0, 10.0), snapping);
 
         if custom_frame {
-            frame::edges(ctx, radius);
+            frame::edges(ctx, radius, self.palette.frame.border);
         }
     }
 

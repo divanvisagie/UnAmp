@@ -5,7 +5,7 @@ UnAmp has three kinds of skin, all chosen from the **Skins** menu:
 | Kind | What it is | What changes |
 |---|---|---|
 | **Default** | Built in, no file | Nothing: egui's stock look, following your system's light/dark setting |
-| **TOML skin** | A `.toml` file of colours | Colours, corner rounding and shadows of every window |
+| **TOML skin** | A `.toml` theme file | Colours, corner rounding and shadows of every window, and of the app's own frame |
 | **Classic skin** | A Winamp 2 `.wsz` plus the `.toml` UnAmp makes from it | Player, Equalizer and Playlist drawn from the skin's own bitmaps; everything else in its colours |
 
 Your choice is saved as `skin = "<name>"` in `~/.config/unamp/config.toml`. If that skin
@@ -33,16 +33,27 @@ file, so running it again is safe. Delete your copy to go back to the built-in.
 | **Copy built-in skins to folder** | Put editable copies of the built-ins in your folder (never overwrites). |
 | **Open skins folder** | Open `~/.config/unamp/skins/` in your file manager, creating it if needed. |
 
-Problems loading a skin (a typo in a key, a bad colour, a broken `.wsz`) are listed in red at the
-bottom of the Skins menu. The skin is skipped, and nothing fails silently.
+Problems loading a skin are listed in red at the bottom of the Skins menu. A bad colour, an
+old-format file or a broken `.wsz` means the skin is skipped. An unknown key is listed but the
+skin still loads. Nothing fails silently.
 
 ## Writing a TOML skin
 
+Skins are written in the **suite theme format**, version 1 ([ADR-0024](adr/0024-suite-theme-format.md)).
+It's designed so one file can theme several apps:
+
+- The shared sections are `[colors]`, `[controls]` and `[window]`. They mean the same in every
+  app that reads the format.
+- Each app's own parts go under `[app.<name>]`, here `[app.unamp]`.
+- An app skips other apps' sections, and a file written for a newer version of the format still
+  loads.
+
 Start from a copy of `steam-classic.toml` (**Copy built-in skins to folder**), change `name`, and
-edit. Every key except `name` is optional, and **any colour you leave out keeps egui's default**
-for the `base` theme, so a skin can be as small as:
+edit. Every key except `format` and `name` is optional, and **any colour you leave out keeps
+egui's default** for the `base` theme. So a skin can be as small as this:
 
 ```toml
+format = 1
 name = "Just Purple"
 base = "dark"
 
@@ -50,55 +61,106 @@ base = "dark"
 accent = "#8A2BE2"
 ```
 
-Colours are `"#RRGGBB"` or `"#RRGGBBAA"`. Unknown keys are errors, not ignored, so a misspelt
-`bakground` is reported in the Skins menu instead of silently doing nothing.
+Colours are `"#RRGGBB"` or `"#RRGGBBAA"`. A key UnAmp doesn't know is ignored but listed in the
+Skins menu, so a misspelt `bakground` is still caught. Keys under another app's `[app.*]`
+section aren't listed. A bad value, such as `text = "green"`, is an error and the skin is
+skipped.
 
 ### Top-level keys
 
 | Key | Type | Meaning |
 |---|---|---|
+| `format` | integer, **required** | Theme format version: `1`. A file without it is the old skin format (see [Upgrading](#upgrading-from-the-old-skin-format)). |
 | `name` | string, **required** | Name in the Skins menu. Matching a built-in's name replaces it. |
 | `author` | string | Shown next to user skins in the menu. |
 | `base` | `"dark"` or `"light"` | The egui theme the skin starts from. A skin fixes the theme; only Default follows the system. |
-| `corner_radius` | integer (px) | Rounding of windows, menus, buttons, UnAmp's painted boxes and the main window's corners. `0` is square. Without it, the main window uses GNOME's 15 px. |
+| `corner_radius` | integer (px) | Rounding of panels, menus, controls and UnAmp's painted boxes. `0` is square. Also the main window's corners, unless `[window] corner_radius` is set. |
 | `shadows` | bool | `false` removes window and popup shadows. |
-| `classic` | string | A `.wsz` file, relative to this TOML, to draw the Player/Equalizer/Playlist from. See [Classic skins](#classic-winamp-skins). |
 
-### `[colors]`: the egui widgets
+### `[colors]`: the base palette
 
 | Key | Used for |
 |---|---|
-| `background` | Window and panel backgrounds |
+| `background` | Panels, and the windows inside the app |
 | `surface` | Inset areas: text fields, lists, slider tracks, seek bar track, EQ curve background, album-art placeholder |
-| `stripe` | Alternate rows in track lists; EQ curve grid lines |
-| `border` | Window and widget outlines |
+| `surface_alt` | Alternate rows in lists; EQ curve grid lines |
+| `border` | Outlines of windows and panels (and of controls, unless `[controls] border` is set) |
 | `text` | Normal text |
-| `text_strong` | Headings, and text on hovered or pressed widgets |
+| `text_strong` | Headings (and text on hovered controls, unless `[controls] text_hover` is set) |
 | `text_weak` | Secondary labels (section headings, counts, status) |
 | `accent` | Selection, slider fill, toggles that are on, the seek bar's played part, the EQ curve |
 | `accent_text` | Text drawn on top of `accent` (e.g. a selected track) |
-| `button` | Button background |
-| `button_hover` | Button background under the mouse |
-| `button_active` | Button background while pressed |
-| `link` | Links, and the now-playing track in lists |
+| `link` | Links, and the current item in lists (the now-playing track) |
+| `warning` | Warnings |
 | `error` | Error messages |
 
-egui draws buttons with one fill and slider/checkbox tracks with another. UnAmp gives tracks the
-`surface` colour so they stay visible when `button` matches `background`.
-
-### `[player]`: UnAmp's own painted parts
+### `[controls]`: buttons, sliders, checkboxes, drop-downs
 
 | Key | Used for |
 |---|---|
+| `background` | A control at rest |
+| `hover` | Under the mouse |
+| `pressed` | While pressed |
+| `text` | Text and icons on controls (defaults to `colors.text`) |
+| `text_hover` | Text on hovered or pressed controls (defaults to `colors.text_strong`) |
+| `border` | Control outlines (defaults to `colors.border`) |
+
+egui draws buttons with one fill and slider/checkbox tracks with another. Tracks at rest use
+`colors.surface`, so they stay visible when `controls.background` matches `colors.background`.
+
+### `[window]`: the app's own frame
+
+UnAmp draws its own title bar and window edge ([ADR-0020](adr/0020-draw-own-window-frame.md)).
+
+| Key | Used for |
+|---|---|
+| `title_bar` | The title bar's background (defaults to `colors.background`) |
+| `title_text` | The window title (defaults to `colors.text`) |
+| `border` | The one-pixel window edge (defaults to `colors.border`) |
+| `corner_radius` | The window's corners, in px. Defaults to the top-level `corner_radius`, else GNOME's 15. Square while maximised. |
+
+### `[window.controls]`: minimise, maximise, close
+
+These are themed separately from `[controls]`, so the window buttons can look like a title bar's
+and not like the app's buttons. Each falls back to the matching control colour.
+
+| Key | Used for |
+|---|---|
+| `icon` | The symbols at rest |
+| `icon_hover` | The symbols under the mouse |
+| `hover` | Background under the mouse |
+| `pressed` | Background while pressed |
+| `close_hover` | Close's background under the mouse (default GNOME red) |
+| `close_icon_hover` | Close's symbol under the mouse (default white) |
+
+### `[app.unamp]`: UnAmp's own parts
+
+| Key | Used for |
+|---|---|
+| `classic` | A `.wsz` file, relative to this TOML, to draw the Player/Equalizer/Playlist from. See [Classic skins](#classic-winamp-skins). |
 | `display` | Spectrum analyzer background |
 | `time` | The big time display |
 | `title` | The scrolling song title |
-| `spectrum_low`, `spectrum_mid`, `spectrum_high` | Analyzer gradient: bottom, 60% up, top |
-| `spectrum` | A list of colours, bottom to top, for the whole gradient; overrides the three stops above |
+| `spectrum` | Analyzer bar colours, bottom to top: a list of two or more |
 | `spectrum_peak` | The falling peak caps |
 
-When these are left out: black analyzer, `text_strong` for time and title, and the classic
-green → yellow → red gradient.
+When these are left out, UnAmp uses a black analyzer, `text_strong` for the time and title, and
+the classic green → yellow → red gradient.
+
+### Upgrading from the old skin format
+
+Skins written before format 1 have no `format` key and won't load. The Skins menu says so.
+Skins that UnAmp converted from a `.wsz` are redone automatically on the next reload, and the old
+file is kept as `<name>.toml.v0`. To upgrade a hand-written skin, add `format = 1` and move
+these keys:
+
+| Old | New |
+|---|---|
+| `classic` (top level) | `[app.unamp] classic` |
+| `[colors] stripe` | `[colors] surface_alt` |
+| `[colors] button`, `button_hover`, `button_active` | `[controls] background`, `hover`, `pressed` |
+| `[player]` | `[app.unamp]` |
+| `spectrum_low`, `spectrum_mid`, `spectrum_high` | `spectrum = [low, mid, high]` |
 
 ## Classic Winamp skins
 
@@ -124,14 +186,15 @@ Colours are pulled from the skin so the Media Library and menus match it
 
 | From the skin | Becomes |
 |---|---|
-| `pledit.txt` Normal, Current, NormalBG, SelectedBG | `text`, `text_strong`/`link`/`title`, `surface`, `accent` |
+| `pledit.txt` Normal, Current, NormalBG, SelectedBG | `text`, `text_strong`/`link`/`title`, `surface`/`controls.pressed`, `accent` |
 | `viscolor.txt` (24 colours) | `display`, the full `spectrum`, `spectrum_peak` |
 | `numbers.bmp` / `nums_ex.bmp` (brightest pixel) | `time` |
 | `main.bmp` (average colour) | `background`, and whether `base` is dark or light |
 
-Plus the line that turns on the bitmap windows:
+Plus the line, under `[app.unamp]`, that turns on the bitmap windows:
 
 ```toml
+[app.unamp]
 classic = "Shakira_04.wsz"
 ```
 
@@ -151,7 +214,7 @@ bitmaps at Winamp's fixed sizes, at double size ([ADR-0010](adr/0010-classic-wsz
 
 The windows float and drag like the others (drag any part that isn't a control) but can't be
 resized. The Media Library stays a regular window in the skin's colours. In classic mode the
-`[player]` colours aren't used by these three windows; the skin's own bitmaps and `viscolor.txt`
+`[app.unamp]` colours aren't used by these three windows; the skin's own bitmaps and `viscolor.txt`
 are.
 
 Only `main.bmp` is required. If a bitmap is missing or too small for a sprite, that part is just
@@ -170,7 +233,8 @@ window shapes (so non-rectangular skins show square corners), custom cursors (`*
 | Symptom | Likely cause |
 |---|---|
 | A new `.wsz` doesn't appear | Not reloaded yet (**Skins → Reload skins**), or it's still named `.zip`. |
-| A converted skin looks like plain colours | Its TOML has no `classic` line, e.g. it was converted by an older UnAmp. Delete the `.toml` and reload. |
+| A converted skin looks like plain colours | Its TOML has no `[app.unamp] classic` line. Delete the `.toml` and reload. |
+| "written in the old skin format" | The file predates format 1. See [Upgrading](#upgrading-from-the-old-skin-format). |
 | Edits don't show | Reload skins. Make sure you edited the file in `~/.config/unamp/skins/`, not the repo copy. |
 | My skin isn't in the menu | Check the red errors at the bottom of the Skins menu. |
 | A classic window is off-screen | **Windows → Reset layout**. |
