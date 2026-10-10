@@ -1802,6 +1802,10 @@ impl eframe::App for UnAmpApp {
         }
     }
 
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        frame::release_grab(ctx, raw_input);
+    }
+
     fn on_exit(&mut self) {
         if self.screenshot.is_some() {
             return;
