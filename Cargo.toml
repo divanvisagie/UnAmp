@@ -1,6 +1,6 @@
 [package]
 name = "unamp"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "GPL-2.0-only"
 description = "Native desktop music player for local folders and network shares, with album art and a spectrum analyzer"
