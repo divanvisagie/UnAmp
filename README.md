@@ -4,7 +4,7 @@
 
 It really whips the llama's ass — on Unix. (UnAmp, as in Unix.)
 
-**Website:** [divanvisagie.github.io/UnAmp](https://divanvisagie.github.io/UnAmp/)
+**Website:** [unamp.divanv.com](https://unamp.divanv.com)
 
 Native Rust/egui music player. Point it at a folder, a mounted drive or a network share and play
 what's there: album art, a scrolling title, a big time display, a proper bar spectrum analyzer and
