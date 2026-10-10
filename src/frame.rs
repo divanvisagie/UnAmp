@@ -84,36 +84,48 @@ pub fn title_bar(ui: &mut egui::Ui, style: &FrameStyle, title: &str, custom: boo
         resp.context_menu(|ui| window_menu(ui, &ctx));
     }
 
-    let mut left_width = 0.0;
+    // Laid out side by side in areas of their own, so nothing can push the
+    // row wider than the bar: the window buttons at the right first, then the
+    // menus in the width that's left. (A menu bar takes its whole width, so
+    // putting the buttons after it in one row made the panel overflow the
+    // window by the spacing between them, and its rounded corner with it.)
+    let row = egui::Rect::from_min_size(bar.min, egui::vec2(bar.width(), ROW_HEIGHT));
     let mut right_width = 0.0;
-    ui.horizontal(|ui| {
-        ui.set_min_height(ROW_HEIGHT);
-        // Where the menus end: the menu bar itself spans the whole bar.
-        let menus_end = egui::MenuBar::new()
-            .ui(ui, |ui| {
-                menus(ui);
-                ui.cursor().left()
-            })
-            .inner;
-        left_width = menus_end - bar.left();
-        if custom {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                if button(ui, &style.controls, Button::Close).on_hover_text("Close").clicked() {
-                    ctx.send_viewport_cmd(ViewportCommand::Close);
-                }
-                let max = maximized(&ctx);
-                let (kind, tip) = if max { (Button::Restore, "Restore") } else { (Button::Maximize, "Maximise") };
-                if button(ui, &style.controls, kind).on_hover_text(tip).clicked() {
-                    ctx.send_viewport_cmd(ViewportCommand::Maximized(!max));
-                }
-                if button(ui, &style.controls, Button::Minimize).on_hover_text("Minimise").clicked() {
-                    ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
-                }
-                right_width = bar.right() - ui.min_rect().left();
-            });
+    if custom {
+        let mut buttons = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(row)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        buttons.spacing_mut().item_spacing.x = 4.0;
+        if button(&mut buttons, &style.controls, Button::Close).on_hover_text("Close").clicked() {
+            ctx.send_viewport_cmd(ViewportCommand::Close);
         }
-    });
+        let max = maximized(&ctx);
+        let (kind, tip) = if max { (Button::Restore, "Restore") } else { (Button::Maximize, "Maximise") };
+        if button(&mut buttons, &style.controls, kind).on_hover_text(tip).clicked() {
+            ctx.send_viewport_cmd(ViewportCommand::Maximized(!max));
+        }
+        if button(&mut buttons, &style.controls, Button::Minimize).on_hover_text("Minimise").clicked() {
+            ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
+        }
+        right_width = bar.right() - buttons.min_rect().left();
+    }
+    let menus_rect = row.with_max_x(row.right() - right_width - ui.spacing().item_spacing.x);
+    let mut menus_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(menus_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    // Where the menus end: the menu bar itself spans its whole area.
+    let menus_end = egui::MenuBar::new()
+        .ui(&mut menus_ui, |ui| {
+            menus(ui);
+            ui.cursor().left()
+        })
+        .inner;
+    let left_width = menus_end - bar.left();
+    ui.advance_cursor_after_rect(row);
 
     // Centred on the window, not on the gap between menus and buttons, and
     // shortened with an ellipsis rather than running into either.
