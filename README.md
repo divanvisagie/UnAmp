@@ -4,6 +4,8 @@
 
 It really whips the llama's ass — on Unix. (UnAmp, as in Unix.)
 
+**Website:** [divanvisagie.github.io/UnAmp](https://divanvisagie.github.io/UnAmp/)
+
 Native Rust/egui music player. Point it at a folder, a mounted drive or a network share and play
 what's there: album art, a scrolling title, a big time display, a proper bar spectrum analyzer and
 a 10-band equalizer. Like the original, it comes in separate windows — Player, Equalizer,
@@ -97,6 +99,23 @@ doesn't draw, is in [docs/skinning.md](docs/skinning.md).
 
 ## Install
 
+### Download (.deb)
+
+The latest `.deb` for Ubuntu and Debian-based distributions (x86-64) is on the
+[releases page](https://github.com/divanvisagie/UnAmp/releases/latest):
+
+```bash
+wget https://github.com/divanvisagie/UnAmp/releases/latest/download/unamp_amd64.deb
+sudo apt install ./unamp_amd64.deb
+```
+
+### From crates.io
+
+```bash
+sudo apt install -y libasound2-dev pkg-config
+cargo install unamp
+```
+
 ### From Source
 
 ```bash
@@ -108,7 +127,7 @@ Running from source? `make install-desktop` registers a launcher and icon for yo
 `~/.local/share` (undo with `make uninstall-desktop`), so GNOME's dock and media controls show
 UnAmp's name and icon.
 
-### Linux (.deb)
+### Build the .deb yourself
 
 ```bash
 sudo apt install -y dpkg-dev

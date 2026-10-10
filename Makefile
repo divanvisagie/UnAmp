@@ -29,6 +29,7 @@ ICON_TMP_DIR := target/icons
 
 RELEASE_BRANCH := master
 TAG := v$(VERSION)
+SITE_PAGE := docs/index.html
 # Optional release notes (Markdown): make release NOTES=path/to/notes.md.
 # Written notes come first; GitHub's generated changelog link follows.
 NOTES ?=
@@ -38,7 +39,7 @@ NOTES_FLAG := $(if $(NOTES),--notes-file "$(NOTES)")
 
 SCREENSHOT := docs/screenshot.png
 
-.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean-deb clean-icons icons icon-runtime release release-check bump install-desktop uninstall-desktop screenshot
+.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean-deb clean-icons icons icon-runtime release release-check bump install-desktop uninstall-desktop screenshot docs
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -153,13 +154,16 @@ clean-deb: ## Remove built .deb artifacts
 # Releases are cut from a clean, pushed $(RELEASE_BRANCH): the tag is created
 # locally on HEAD and pushed before `gh release create --verify-tag`, so the
 # release always points at the exact commit the .deb was built from.
-release: release-check build-deb ## Tag HEAD, push it, and publish the .deb as a GitHub release (NOTES=file.md for written notes)
+# The crates.io publish runs last: it can't be undone, and if it fails the
+# GitHub release is already out, so rerun just `cargo publish`.
+release: release-check build-deb ## Tag HEAD, push it, publish the .deb as a GitHub release and the crate to crates.io (NOTES=file.md for written notes)
 	@test -z "$$(git status --porcelain)" || { echo "the build modified tracked files (stale Cargo.lock?) — commit them and retry"; exit 1; }
 	cp "$(DEB_PATH)" "$(LATEST_DEB_PATH)"
 	git tag -a "$(TAG)" -m "$(TAG)"
 	git push origin "$(TAG)"
 	gh release create "$(TAG)" "$(DEB_PATH)" "$(LATEST_DEB_PATH)" --title "$(TAG)" $(NOTES_FLAG) --generate-notes --verify-tag
-	@echo "Released $(TAG) with $(DEB_PATH)"
+	cargo publish
+	@echo "Released $(TAG) with $(DEB_PATH) and published $(APP_NAME) $(VERSION) to crates.io"
 
 release-check: ## Verify a release can be cut (on master, clean, pushed, version not yet tagged)
 	@test -z "$(NOTES)" || test -f "$(NOTES)" || { echo "NOTES file not found: $(NOTES)"; exit 1; }
@@ -170,14 +174,22 @@ release-check: ## Verify a release can be cut (on master, clean, pushed, version
 	@git fetch --quiet --tags origin "$(RELEASE_BRANCH)"
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-parse "origin/$(RELEASE_BRANCH)")" || { echo "HEAD differs from origin/$(RELEASE_BRANCH) — push or pull first"; exit 1; }
 	@! git rev-parse -q --verify "refs/tags/$(TAG)" >/dev/null || { echo "$(TAG) is already tagged — bump the version first: make bump V=x.y.z"; exit 1; }
+	@grep -q "releases/download/$(TAG)/$(APP_NAME)_$(DEB_VERSION)_$(ARCH).deb" "$(SITE_PAGE)" || { echo "$(SITE_PAGE) doesn't link $(TAG)'s .deb — bump with make bump V=x.y.z"; exit 1; }
 	@echo "Ready to release $(TAG) from $(RELEASE_BRANCH) at $$(git rev-parse --short HEAD)"
 
-bump: ## Set the version and commit: make bump V=x.y.z
+bump: ## Set the version, point the site download at it, and commit: make bump V=x.y.z
 	@echo "$(V)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "usage: make bump V=x.y.z"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "working tree has uncommitted changes"; exit 1; }
 	sed -i '0,/^version = ".*"/s//version = "$(V)"/' Cargo.toml
 	cargo update --workspace --quiet
-	git commit --quiet -m "Bump version to $(V)" Cargo.toml Cargo.lock
+	@# Point the landing page's download button and wget line at the new
+	@# release's versioned .deb, so each version downloads under its own name.
+	sed -i -E \
+		-e 's#releases/download/v[0-9.]+/$(APP_NAME)_[0-9.]+-[0-9]+_$(ARCH)\.deb#releases/download/v$(V)/$(APP_NAME)_$(V)-$(DEB_REVISION)_$(ARCH).deb#g' \
+		-e 's#\./$(APP_NAME)_[0-9.]+-[0-9]+_$(ARCH)\.deb#./$(APP_NAME)_$(V)-$(DEB_REVISION)_$(ARCH).deb#g' \
+		-e 's#Download \.deb \(v[0-9.]+\)#Download .deb (v$(V))#g' \
+		"$(SITE_PAGE)"
+	git commit --quiet -m "Bump version to $(V)" Cargo.toml Cargo.lock "$(SITE_PAGE)"
 	@echo "Bumped $(VERSION) -> $(V)"
 
 build-unsupported:
@@ -190,3 +202,8 @@ install-unsupported:
 
 clean-icons: ## Remove temporary icon build files
 	rm -rf "$(ICON_TMP_DIR)"
+
+docs: ## Serve the docs site at http://localhost:8000
+	@command -v python3 >/dev/null 2>&1 || { echo "python3 is required"; exit 1; }
+	@echo "Serving docs at http://localhost:8000"
+	@cd docs && python3 -m http.server 8000
