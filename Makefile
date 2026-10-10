@@ -46,7 +46,7 @@ NOTES_FLAG := $(if $(NOTES),--notes-file "$(NOTES)")
 
 SCREENSHOT := docs/screenshot.png
 
-.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean clean-deb clean-icons icons icon-runtime release release-check screenshot docs dmg build-macos install-macos
+.PHONY: help dev build build-linux build-deb build-unsupported install install-linux install-unsupported clean clean-deb clean-icons icons icon-runtime release release-check screenshot docs dmg build-macos install-macos freebsd-test freebsd-down freebsd-destroy
 
 help: ## Show this help
 	@echo "Usage: make <target>"
@@ -215,3 +215,13 @@ docs: ## Serve the docs site at http://localhost:8000
 	@command -v python3 >/dev/null 2>&1 || { echo "python3 is required"; exit 1; }
 	@echo "Serving docs at http://localhost:8000"
 	@cd docs && python3 -m http.server 8000
+
+freebsd-test: ## Run the tests on FreeBSD in a bsdt VM (first run installs rust; takes a while)
+	bsdt up
+	bsdt exec -- cargo test
+
+freebsd-down: ## Shut the FreeBSD VM down, keeping its disk
+	bsdt down
+
+freebsd-destroy: ## Delete the FreeBSD VM
+	bsdt destroy

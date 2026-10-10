@@ -1,0 +1,19 @@
+# FreeBSD VM for running UnAmp's tests on FreeBSD; see https://bsdt.divanv.com
+# `make freebsd-test` boots it and runs them. The VM has no sound card, so
+# this covers building and the tests, not playback.
+
+[vm]
+os = "freebsd"
+version = "15.1"
+cpus = 4
+memory = "4G"
+
+[packages]
+# cpal (under rodio) talks to ALSA on FreeBSD and finds it with pkg-config.
+install = ["rust", "pkgconf", "alsa-lib"]
+
+[sync]
+exclude = ["/target"]    # the guest's build cache survives syncs
+
+[provision]
+run = ["cargo fetch"]
