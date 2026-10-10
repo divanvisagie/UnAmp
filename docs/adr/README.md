@@ -40,7 +40,7 @@ mechanics of adding one.
 
 | # | Title | Status |
 |---|-------|--------|
-| [0001](0001-linux-only-egui-native-app.md) | Build UnAmp as a Linux-only native egui/eframe app, following Photograph | Accepted |
+| [0001](0001-linux-only-egui-native-app.md) | Build UnAmp as a Linux-only native egui/eframe app, following Photograph | Accepted (macOS `.dmg` added by [ADR-0025](0025-release-from-a-tag-with-ci-packages.md)) |
 | [0002](0002-stock-egui-style.md) | Use egui's stock style instead of a custom theme | Superseded by [ADR-0008](0008-toml-skins.md) |
 | [0003](0003-browse-folders-no-library-database.md) | Browse folders directly instead of scanning into a library database | Proposed (no-search consequence superseded by [ADR-0015](0015-search-by-walking.md)) |
 | [0004](0004-file-io-off-ui-thread.md) | Keep track I/O off the UI thread, with rodio/symphonia for playback and lofty for tags | Proposed |
@@ -64,6 +64,7 @@ mechanics of adding one.
 | [0022](0022-snap-to-grid-and-tiling.md) | Snap floating windows to a grid, or tile them | Accepted (tile drawing superseded by [ADR-0023](0023-tile-with-pinned-windows.md)) |
 | [0023](0023-tile-with-pinned-windows.md) | Tile with the real windows, pinned in place, instead of panels | Accepted |
 | [0024](0024-suite-theme-format.md) | A versioned theme format with shared sections and per-app sections | Proposed |
+| [0025](0025-release-from-a-tag-with-ci-packages.md) | Cut releases locally with one command, and build the .deb and .dmg on GitHub | Proposed |
 
 ## Decision Relationship
 
@@ -106,6 +107,8 @@ flowchart TD
     R --> W
     H --> X[0024: Suite theme format]
     T --> X
+    A --> Y[0025: One-command release, CI packages]
+    U --> Y
 ```
 
 ## Revisit Triggers

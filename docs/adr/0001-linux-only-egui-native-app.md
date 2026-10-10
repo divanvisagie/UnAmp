@@ -4,7 +4,8 @@ Date: 2026-10-09
 
 ## Status
 
-Accepted
+Accepted. "Linux only" is relaxed by [ADR-0025](0025-release-from-a-tag-with-ci-packages.md): releases also ship an
+automated, unsigned macOS `.dmg`, while Linux stays the platform UnAmp is built for.
 
 ## Context
 

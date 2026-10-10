@@ -9,7 +9,7 @@ homepage = "https://unamp.divanv.com"
 readme = "README.md"
 keywords = ["music", "player", "audio", "egui", "winamp"]
 categories = ["multimedia::audio"]
-exclude = ["docs/", "target/", "Makefile", ".claude/"]
+exclude = ["docs/", "target/", "Makefile", ".claude/", ".github/", "scripts/", "packaging/macos/"]
 
 [dependencies]
 anyhow = "1.0.104"

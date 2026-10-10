@@ -22,7 +22,8 @@ regenerated after any UI change without showing anyone's real music or drives
 
 ## Status
 
-New (v0.1). Linux only (see [ADR-0001](docs/adr/0001-linux-only-egui-native-app.md)).
+New (v0.1). Built and used on Linux ([ADR-0001](docs/adr/0001-linux-only-egui-native-app.md)); each
+release also ships an unsigned macOS `.dmg`, built automatically ([ADR-0025](docs/adr/0025-release-from-a-tag-with-ci-packages.md)).
 
 ## What It Does Today
 
@@ -109,6 +110,15 @@ wget https://github.com/divanvisagie/UnAmp/releases/latest/download/unamp_amd64.
 sudo apt install ./unamp_amd64.deb
 ```
 
+### Download (macOS)
+
+The latest `.dmg` (Apple Silicon and Intel, macOS 11+) is on the
+[releases page](https://github.com/divanvisagie/UnAmp/releases/latest), or
+`https://github.com/divanvisagie/UnAmp/releases/latest/download/UnAmp.dmg`. Open it and drag UnAmp
+to Applications. It isn't signed by Apple, so allow it once under System Settings → Privacy &
+Security → Open Anyway (or run `xattr -dr com.apple.quarantine /Applications/UnAmp.app`).
+Mounted-drive discovery, network shares in the sidebar and media keys are Linux-only.
+
 ### From crates.io
 
 ```bash
@@ -154,6 +164,20 @@ Significant decisions are recorded as ADRs in [`docs/adr/`](docs/adr/README.md).
 
 UnAmp was built with Claude Code from ten short prompts, listed word for word in
 [`docs/prompts.txt`](docs/prompts.txt).
+
+### Releasing
+
+One command, run on a clean, pushed `master`:
+
+```bash
+make release                 # next patch version; BUMP=minor|major or V=x.y.z to choose
+```
+
+It bumps the version, tags and pushes, opens a draft GitHub release and publishes the crate to
+crates.io. The [release workflow](.github/workflows/release.yml) then builds the `.deb` and the
+`.dmg` on GitHub, attaches them, publishes the release and points the website's download links
+at them ([ADR-0025](docs/adr/0025-release-from-a-tag-with-ci-packages.md)). Pull afterwards: the
+link update is a commit on `master`.
 
 ## License
 

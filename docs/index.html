@@ -44,7 +44,9 @@
 
       <h2>Download</h2>
 
-      <p>Available as a <code>.deb</code> for Ubuntu and Debian-based distributions (x86-64).</p>
+      <h3>Linux</h3>
+
+      <p>A <code>.deb</code> for Ubuntu and Debian-based distributions (x86-64).</p>
       <p>
         <a href="https://github.com/divanvisagie/UnAmp/releases/download/v0.1.0/unamp_0.1.0-1_amd64.deb" style="
           display: inline-block;
@@ -69,6 +71,36 @@ sudo apt install ./unamp_0.1.0-1_amd64.deb</code></pre>
         from the folder you downloaded it to:
       </p>
 <pre><code>sudo apt install ./unamp_0.1.0-1_amd64.deb</code></pre>
+
+      <h3>macOS</h3>
+
+      <p>A <code>.dmg</code> for macOS 11 or later, on Apple Silicon and Intel.</p>
+      <p>
+        <a href="https://github.com/divanvisagie/UnAmp/releases/download/v0.1.0/UnAmp-0.1.0.dmg" style="
+          display: inline-block;
+          font-weight: bold;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          border: 1px solid;
+          padding: 0.5rem 1.1rem;
+          text-decoration: none;
+          background: var(--accent-color, #e05a00);
+          border-color: var(--accent-color, #e05a00);
+          color: #ffffff;
+        ">Download .dmg (v0.1.0)</a>
+      </p>
+      <p>
+        Open it and drag UnAmp to Applications. The app isn't signed by Apple, so
+        macOS blocks it the first time: open it once, then allow it under
+        <strong>System Settings &rarr; Privacy &amp; Security &rarr; Open Anyway</strong>.
+        If macOS says it's damaged, clear the download flag instead:
+      </p>
+<pre><code>xattr -dr com.apple.quarantine /Applications/UnAmp.app</code></pre>
+      <p style="font-size: 13px; color: var(--muted-color, #2f2925);">
+        UnAmp is built and used on Linux. The macOS build is produced automatically for each
+        release; mounted drives, network shares and media keys are Linux-only features.
+      </p>
+
       <p>
         Older versions and release notes are on the
         <a href="https://github.com/divanvisagie/UnAmp/releases">releases page</a>.
