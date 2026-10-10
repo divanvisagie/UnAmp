@@ -22,10 +22,10 @@ pub const FORMAT: u32 = 1;
 const APP: &str = "unamp";
 
 /// Skins compiled into the binary, as (file name, contents).
-const BUILT_IN: &[(&str, &str)] = &[(
-    "steam-classic.toml",
-    include_str!("../skins/steam-classic.toml"),
-)];
+const BUILT_IN: &[(&str, &str)] = &[
+    ("steam-classic.toml", include_str!("../skins/steam-classic.toml")),
+    ("photograph.toml", include_str!("../skins/photograph.toml")),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -525,14 +525,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("unamp-export-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let first = export_built_ins(&dir).unwrap();
-        assert_eq!(first.copied, vec!["steam-classic.toml"]);
+        assert_eq!(first.copied, vec!["steam-classic.toml", "photograph.toml"]);
         let path = dir.join("steam-classic.toml");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), BUILT_IN[0].1);
 
         std::fs::write(&path, "name = \"Steam Classic\"\n").unwrap();
         let second = export_built_ins(&dir).unwrap();
         assert!(second.copied.is_empty());
-        assert_eq!(second.skipped, vec!["steam-classic.toml"]);
+        assert_eq!(second.skipped, vec!["steam-classic.toml", "photograph.toml"]);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "name = \"Steam Classic\"\n");
         let _ = std::fs::remove_dir_all(&dir);
     }

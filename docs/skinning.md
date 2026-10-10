@@ -14,8 +14,9 @@ disappears, UnAmp falls back to Default.
 ## Where skins live
 
 - **Built-in skins** are TOML files in the repo's [`skins/`](../skins) folder, compiled into the
-  binary. Today that's [`steam-classic.toml`](../skins/steam-classic.toml), which recreates the
-  olive-green Steam client and doubles as the commented reference for the format.
+  binary. Today those are [`steam-classic.toml`](../skins/steam-classic.toml), which recreates the
+  olive-green Steam client and doubles as the commented reference for the format, and
+  [`photograph.toml`](../skins/photograph.toml), the dark greys and Ubuntu orange of Photograph.
 - **Your skins** go in `~/.config/unamp/skins/`. UnAmp reads every `*.toml` there, and converts
   every `*.wsz` there (see [Classic skins](#classic-winamp-skins)).
 

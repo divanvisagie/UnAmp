@@ -1,0 +1,53 @@
+# Photograph — the Yaru-style dark greys and Ubuntu orange of Photograph,
+# the photo editor (its `photograph_visuals` in src/app.rs). See
+# steam-classic.toml or docs/skinning.md for the format.
+
+format = 1
+name = "Photograph"
+author = "UnAmp"
+base = "dark"
+# GTK/Adwaita-style rounding, as Photograph's widgets and menus.
+corner_radius = 6
+shadows = true
+
+[colors]
+background = "#303030"
+surface = "#242424"
+surface_alt = "#3A3A3A"
+border = "#474747"
+text = "#EEEEEE"
+text_strong = "#FFFFFF"
+text_weak = "#949494"
+accent = "#E95420"       # Ubuntu orange
+accent_text = "#FFFFFF"
+link = "#E95420"
+warning = "#E66A00"
+error = "#C01C28"
+
+[controls]
+background = "#3D3D3D"
+hover = "#474747"
+pressed = "#2A2A2A"
+text = "#EEEEEE"
+text_hover = "#FFFFFF"
+
+[window]
+title_bar = "#303030"
+title_text = "#EEEEEE"
+border = "#474747"
+corner_radius = 15
+
+[window.controls]
+icon = "#EEEEEE"
+icon_hover = "#FFFFFF"
+hover = "#474747"
+pressed = "#2A2A2A"
+close_hover = "#C01C28"
+close_icon_hover = "#FFFFFF"
+
+[app.unamp]
+display = "#242424"
+time = "#E95420"
+title = "#EEEEEE"
+spectrum = ["#E66A00", "#E95420", "#C01C28"]   # bottom to top
+spectrum_peak = "#EEEEEE"

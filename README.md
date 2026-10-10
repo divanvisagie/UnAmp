@@ -34,7 +34,8 @@ release also ships an unsigned macOS `.dmg`, built automatically ([ADR-0025](doc
   windows to float them, and Windows → Snap to grid lines floating windows up on a grid and
   against each other's edges when you move or resize them
   ([ADR-0022](docs/adr/0022-snap-to-grid-and-tiling.md))
-- Skins: stock egui by default, or pick **Steam Classic** (the old olive-green Steam client) from
+- Skins: stock egui by default, or pick **Steam Classic** (the old olive-green Steam client) or
+  **Photograph** (the dark greys and Ubuntu orange of Photograph) from
   the Skins menu; write your own in TOML ([ADR-0008](docs/adr/0008-toml-skins.md)), or drop in a
   classic Winamp `.wsz` and get its windows drawn from its own bitmaps
   ([ADR-0010](docs/adr/0010-classic-wsz-renderer.md))
@@ -89,7 +90,7 @@ The classic bottom row, with nothing focused:
 
 UnAmp starts with egui's stock look; pick another from the **Skins** menu.
 
-- **TOML skins** recolour everything. Steam Classic is built in; write your own in
+- **TOML skins** recolour everything. Steam Classic and Photograph are built in; write your own in
   `~/.config/unamp/skins/`, or use **Skins → Copy built-in skins to folder** for an annotated one to edit.
 - **Classic Winamp skins**: drop a `.wsz` in the same folder and reload. The Player, Equalizer
   and Playlist are drawn from the skin's own bitmaps, the way Winamp drew them. Find thousands at
