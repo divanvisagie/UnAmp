@@ -1,0 +1,28 @@
+# FreeBSD VM for running UnAmp itself: a sway desktop in a VNC window and a
+# sound card that plays on the host. Needs a bsdt with `audio` support.
+#   bsdt -f bsdt-desktop.toml up
+# UnAmp opens on the desktop once it has built, which takes a few minutes
+# the first time.
+# The VM is separate from the test one in bsdt.toml.
+
+[vm]
+os = "freebsd"
+version = "15.1"
+cpus = 4
+memory = "4G"
+gui = true
+audio = true
+
+[packages]
+# alsa-plugins lets cpal's ALSA output reach FreeBSD's OSS sound card;
+# mesa-dri is the software OpenGL eframe draws with.
+install = ["rust", "pkgconf", "alsa-lib", "alsa-plugins", "mesa-libs", "mesa-dri"]
+
+[sync]
+exclude = ["/target"]
+
+[gui]
+start = "cargo run --release"
+
+[provision]
+run = ["cargo fetch"]
