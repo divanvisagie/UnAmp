@@ -66,6 +66,7 @@ mechanics of adding one.
 | [0024](0024-suite-theme-format.md) | A versioned theme format with shared sections and per-app sections | Proposed |
 | [0025](0025-release-from-a-tag-with-ci-packages.md) | Cut releases locally with one command, and build the .deb and .dmg on GitHub | Proposed |
 | [0026](0026-eq-profiles-in-eq-toml.md) | Keep user EQ profiles as named tables in one `eq.toml`, separate from `config.toml` | Proposed |
+| [0027](0027-saved-playlists-in-toml-with-library-roots.md) | Save playlists as TOML in a marked library root, finding moved tracks by path then tags | Proposed (would supersede the format and location in [ADR-0013](0013-save-session-as-m3u.md)) |
 
 ## Decision Relationship
 
@@ -112,6 +113,9 @@ flowchart TD
     U --> Y
     G --> Z[0026: EQ profiles in eq.toml]
     R --> Z
+    M --> AA[0027: TOML playlists in library roots]
+    O --> AA
+    Z --> AA
 ```
 
 ## Revisit Triggers
@@ -125,6 +129,9 @@ flowchart TD
 - Clipping from EQ boosts is audible in practice — add a limiter ([ADR-0007](0007-biquad-equalizer-in-source-chain.md)).
 - People want to share single EQ profiles, keep comments in `eq.toml`, or have hand edits picked up
   live — see [ADR-0026](0026-eq-profiles-in-eq-toml.md).
+- Searching for moved tracks is too slow on a big share, the wrong file gets matched, someone needs
+  playlists in other players (M3U export), or UnAmp gains a library index (fingerprinting) — see
+  [ADR-0027](0027-saved-playlists-in-toml-with-library-roots.md).
 - Classic skins need windowshade mode, other scales or a resizable playlist — see the
   not-implemented list in [ADR-0010](0010-classic-wsz-renderer.md).
 - Built-in skins start changing often enough that stale user copies cause confusion — see
