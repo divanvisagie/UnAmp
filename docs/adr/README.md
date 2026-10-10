@@ -67,6 +67,8 @@ mechanics of adding one.
 | [0025](0025-release-from-a-tag-with-ci-packages.md) | Cut releases locally with one command, and build the .deb and .dmg on GitHub | Proposed |
 | [0026](0026-eq-profiles-in-eq-toml.md) | Keep user EQ profiles as named tables in one `eq.toml`, separate from `config.toml` | Proposed |
 | [0027](0027-saved-playlists-in-toml-with-library-roots.md) | Save playlists as TOML in a marked library root, finding moved tracks by path then tags | Proposed (would supersede the format and location in [ADR-0013](0013-save-session-as-m3u.md)) |
+| [0028](0028-landing-page-and-crates-io.md) | Publish a landing page from `docs/` and the crate to crates.io on every release | Proposed (release steps superseded by [ADR-0025](0025-release-from-a-tag-with-ci-packages.md)) |
+| [0029](0029-album-sections-in-folder-view.md) | List album subfolders as sections of the folder view, one level deep | Accepted |
 
 ## Decision Relationship
 
@@ -116,6 +118,10 @@ flowchart TD
     M --> AA[0027: TOML playlists in library roots]
     O --> AA
     Z --> AA
+    A --> AB[0028: Landing page, crates.io]
+    AB --> Y
+    C --> AD[0029: Album sections in folder view]
+    D --> AD
 ```
 
 ## Revisit Triggers
@@ -132,6 +138,9 @@ flowchart TD
 - Searching for moved tracks is too slow on a big share, the wrong file gets matched, someone needs
   playlists in other players (M3U export), or UnAmp gains a library index (fingerprinting) — see
   [ADR-0027](0027-saved-playlists-in-toml-with-library-roots.md).
+- Album sections make opening folders on a slow share noticeably slower, the 64-folder cap
+  hides albums people expect, or flat folders of mixed albums need grouping by tag — see
+  [ADR-0029](0029-album-sections-in-folder-view.md).
 - Classic skins need windowshade mode, other scales or a resizable playlist — see the
   not-implemented list in [ADR-0010](0010-classic-wsz-renderer.md).
 - Built-in skins start changing often enough that stale user copies cause confusion — see
