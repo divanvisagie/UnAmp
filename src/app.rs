@@ -1,9 +1,11 @@
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use crate::appearance;
 use crate::config::{AppConfig, Repeat};
 use crate::display;
 use crate::eq::{self, EqParams, EqSnapshot};
+use crate::frame;
 use crate::library::{self, Library, Track, TrackAction};
 use crate::metadata::{self, TrackInfo};
 use crate::player::{Engine, PlayState};
@@ -54,6 +56,9 @@ pub struct UnAmpApp {
     /// Result of the last "Copy built-in skins to folder", shown in the menu.
     skin_notice: Option<String>,
     palette: Palette,
+    /// The theme `palette` and the window frame were last set up for; the
+    /// Default skin follows the system's. `None` until the first frame.
+    frame_theme: Option<egui::Theme>,
     /// Bitmaps for the Player/EQ/Playlist when the skin has a `classic` file.
     classic: Option<ClassicSkin>,
     now_info: Option<TrackInfo>,
@@ -90,6 +95,7 @@ impl UnAmpApp {
             .cloned()
             .unwrap_or_else(Skin::default_skin);
         let palette = current.apply(&cc.egui_ctx);
+        appearance::watch(&cc.egui_ctx);
         let classic = load_classic(&current, &cc.egui_ctx, &mut skin_errors);
         Self {
             config,
@@ -105,6 +111,7 @@ impl UnAmpApp {
             skin_errors,
             skin_notice: None,
             palette,
+            frame_theme: None,
             classic,
             now_info: None,
             art: None,
@@ -1221,6 +1228,27 @@ impl UnAmpApp {
         self.classic = load_classic(&current, ctx, &mut self.skin_errors);
     }
 
+    /// Keeps the palette and the window frame in step with the active theme,
+    /// which changes with the desktop's light/dark setting on the Default
+    /// skin (see ADR-0019) or with a skin switch. On Wayland the frame is
+    /// drawn by winit, which only reads the desktop setting when the window
+    /// opens, so it's told the theme explicitly.
+    fn follow_theme(&mut self, ctx: &egui::Context) {
+        let theme = ctx.theme();
+        if self.frame_theme == Some(theme) {
+            return;
+        }
+        if self.frame_theme.is_some() {
+            let current = self.skins.iter().find(|s| s.name == self.config.skin).cloned();
+            self.palette = current.unwrap_or_else(Skin::default_skin).apply(ctx);
+        }
+        self.frame_theme = Some(theme);
+        ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(match theme {
+            egui::Theme::Dark => egui::SystemTheme::Dark,
+            egui::Theme::Light => egui::SystemTheme::Light,
+        }));
+    }
+
     fn show_equalizer(&mut self, ui: &mut egui::Ui) {
         ui.set_width(STACK_WIDTH);
         let before = self.eq.snapshot();
@@ -1412,6 +1440,7 @@ impl eframe::App for UnAmpApp {
         self.config.window_width = Some(size.x);
         self.config.window_height = Some(size.y);
 
+        self.follow_theme(ctx);
         self.library.poll(ctx);
         self.handle_keys(ctx);
         self.update_window_title(ctx);
@@ -1426,13 +1455,17 @@ impl eframe::App for UnAmpApp {
             ctx.request_repaint_after(Duration::from_millis(250));
         }
 
+        let custom_frame = !self.config.system_title_bar;
+        let radius = if custom_frame { frame::corner_radius(ctx, self.palette.window_radius) } else { 0 };
+        let title = self.window_title.clone();
         egui::Panel::top("menu")
             .frame(
                 egui::Frame::side_top_panel(ui.style())
-                    .inner_margin(egui::Margin::symmetric(8, 4)),
+                    .inner_margin(egui::Margin::symmetric(8, 4))
+                    .corner_radius(egui::CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 }),
             )
             .show(ui, |ui| {
-                egui::MenuBar::new().ui(ui, |ui| {
+                frame::title_bar(ui, &title, custom_frame, |ui| {
                     ui.menu_button("Windows", |ui| {
                         for (window, label) in [
                             (Window::Player, "Player"),
@@ -1454,6 +1487,16 @@ impl eframe::App for UnAmpApp {
                             self.config.show_playlist = true;
                             self.config.show_library = true;
                         }
+                        ui.separator();
+                        if ui
+                            .checkbox(&mut self.config.system_title_bar, "System title bar")
+                            .on_hover_text("Let the desktop draw the window frame instead of the skin")
+                            .clicked()
+                        {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
+                                self.config.system_title_bar,
+                            ));
+                        }
                     });
                     ui.menu_button("Skins", |ui| self.show_skins_menu(ui));
                 });
@@ -1462,7 +1505,8 @@ impl eframe::App for UnAmpApp {
         egui::Panel::bottom("status")
             .frame(
                 egui::Frame::side_top_panel(ui.style())
-                    .inner_margin(egui::Margin::symmetric(10, 4)),
+                    .inner_margin(egui::Margin::symmetric(10, 4))
+                    .corner_radius(egui::CornerRadius { nw: 0, ne: 0, sw: radius, se: radius }),
             )
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1576,6 +1620,19 @@ impl eframe::App for UnAmpApp {
             .show(ctx, |ui| self.show_library(ui, ctx));
         self.config.show_library = open;
 
+        if custom_frame {
+            frame::edges(ctx, radius);
+        }
+    }
+
+    /// Transparent behind UnAmp's own frame, so its rounded corners show the
+    /// desktop; the panels paint everything else.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        if self.config.system_title_bar {
+            visuals.panel_fill.to_normalized_gamma_f32()
+        } else {
+            [0.0; 4]
+        }
     }
 
     fn on_exit(&mut self) {

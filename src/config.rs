@@ -49,6 +49,9 @@ pub struct AppConfig {
     pub show_library: bool,
     /// The Waveform window; off unless turned on from the Windows menu.
     pub show_waveform: bool,
+    /// Let the desktop draw the window frame instead of UnAmp's own title
+    /// bar, which follows the skin (see ADR-0020).
+    pub system_title_bar: bool,
 }
 
 impl Default for AppConfig {
@@ -71,6 +74,7 @@ impl Default for AppConfig {
             show_playlist: true,
             show_library: true,
             show_waveform: false,
+            system_title_bar: false,
         }
     }
 }

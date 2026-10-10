@@ -1,9 +1,11 @@
 mod app;
+mod appearance;
 mod classic;
 mod command;
 mod config;
 mod display;
 mod eq;
+mod frame;
 mod library;
 mod locations;
 mod metadata;
@@ -49,7 +51,11 @@ fn main() -> eframe::Result {
             .with_app_id("unamp")
             .with_icon(build_window_icon())
             .with_inner_size([width, height])
-            .with_min_inner_size([800.0, 600.0]),
+            .with_min_inner_size([800.0, 600.0])
+            // UnAmp draws its own frame unless asked not to (see ADR-0020);
+            // transparency lets that frame have rounded corners.
+            .with_decorations(config.system_title_bar)
+            .with_transparent(true),
         ..Default::default()
     };
 

@@ -58,6 +58,8 @@ mechanics of adding one.
 | [0016](0016-mpris-media-controls.md) | Expose playback over MPRIS with zbus, optional at runtime | Accepted |
 | [0017](0017-daw-style-waveform.md) | Draw a DAW-style whole-track waveform by decoding the track a second time | Proposed |
 | [0018](0018-one-command-path.md) | Route every front end through one command type and shared display rules | Accepted |
+| [0019](0019-follow-desktop-color-scheme.md) | Follow the desktop's light/dark setting through the XDG portal | Accepted |
+| [0020](0020-draw-own-window-frame.md) | Draw UnAmp's own window frame, following the skin | Accepted |
 
 ## Decision Relationship
 
@@ -88,6 +90,10 @@ flowchart TD
     D --> Q
     J --> R[0018: One command path]
     P --> R
+    H --> S[0019: Follow desktop light/dark]
+    P --> S
+    S --> T[0020: Own window frame]
+    H --> T
 ```
 
 ## Revisit Triggers
@@ -110,4 +116,8 @@ flowchart TD
   practice — see [ADR-0016](0016-mpris-media-controls.md).
 - Waveforms over a slow share lag or load the network noticeably, or recomputing after restarts
   matters — see [ADR-0017](0017-daw-style-waveform.md) (disk cache, zoom).
+- winit/eframe start reporting the Linux system theme, or users want accent colours or high
+  contrast followed — see [ADR-0019](0019-follow-desktop-color-scheme.md).
+- The own frame misbehaves on a desktop (no compositor, tiling WMs, missing shadows bother
+  people) — see [ADR-0020](0020-draw-own-window-frame.md); the system title bar is one click away.
 - A third app wants mount discovery, or the two copies diverge — extract a crate ([ADR-0005](0005-reuse-photograph-mount-discovery.md)).

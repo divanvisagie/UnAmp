@@ -60,7 +60,7 @@ Colours are `"#RRGGBB"` or `"#RRGGBBAA"`. Unknown keys are errors, not ignored, 
 | `name` | string, **required** | Name in the Skins menu. Matching a built-in's name replaces it. |
 | `author` | string | Shown next to user skins in the menu. |
 | `base` | `"dark"` or `"light"` | The egui theme the skin starts from. A skin fixes the theme; only Default follows the system. |
-| `corner_radius` | integer (px) | Rounding of windows, menus, buttons and UnAmp's painted boxes. `0` is square. |
+| `corner_radius` | integer (px) | Rounding of windows, menus, buttons, UnAmp's painted boxes and the main window's corners. `0` is square. Without it, the main window uses GNOME's 15 px. |
 | `shadows` | bool | `false` removes window and popup shadows. |
 | `classic` | string | A `.wsz` file, relative to this TOML, to draw the Player/Equalizer/Playlist from. See [Classic skins](#classic-winamp-skins). |
 

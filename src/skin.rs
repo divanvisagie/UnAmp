@@ -120,6 +120,9 @@ pub struct Palette {
     pub spectrum_stops: Vec<Color32>,
     /// Corner rounding for painted boxes, matching the skin's widgets.
     pub radius: f32,
+    /// Corner rounding of the main window's own frame: the skin's
+    /// `corner_radius`, or GNOME's when it doesn't set one.
+    pub window_radius: u8,
 }
 
 impl Palette {
@@ -295,9 +298,13 @@ impl Skin {
             spectrum_peak: or(p.spectrum_peak, Color32::from_gray(200)),
             spectrum_stops: p.spectrum.iter().flatten().map(|h| h.0).collect(),
             radius: self.corner_radius.map(f32::from).unwrap_or(2.0),
+            window_radius: self.corner_radius.unwrap_or(GNOME_WINDOW_RADIUS),
         }
     }
 }
+
+/// libadwaita's `--window-radius`, as shipped in Ubuntu's Yaru styles too.
+const GNOME_WINDOW_RADIUS: u8 = 15;
 
 /// Folder for user skins.
 pub fn user_skins_dir() -> Option<PathBuf> {
