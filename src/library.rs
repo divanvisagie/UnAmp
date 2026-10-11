@@ -9,7 +9,7 @@ use std::sync::{Arc, mpsc};
 use crate::locations::{self, Location};
 use crate::metadata::{self, TrackInfo};
 use crate::search::Search;
-use crate::tree::FolderTree;
+use patina::tree::FolderTree;
 
 pub const ROW_HEIGHT: f32 = 22.0;
 /// Only folders with at most this many subfolders get album sections, so

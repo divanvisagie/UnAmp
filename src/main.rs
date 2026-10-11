@@ -1,12 +1,10 @@
 mod app;
-mod appearance;
 mod classic;
 mod command;
 mod config;
 mod display;
 mod eq;
 mod eq_profiles;
-mod frame;
 mod layout;
 mod library;
 mod locations;
@@ -19,7 +17,6 @@ mod screenshot;
 mod search;
 mod session;
 mod skin;
-mod tree;
 mod visualizer;
 mod waveform;
 mod wsz;
@@ -49,16 +46,17 @@ fn main() -> eframe::Result {
     let height = config.window_height.unwrap_or(860.0);
 
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("UnAmp")
-            .with_app_id("unamp")
-            .with_icon(build_window_icon())
-            .with_inner_size([width, height])
-            .with_min_inner_size([800.0, 600.0])
-            // UnAmp draws its own frame unless asked not to (see ADR-0020);
-            // transparency lets that frame have rounded corners.
-            .with_decorations(config.system_title_bar)
-            .with_transparent(true),
+        // UnAmp draws its own frame unless asked not to (ADR-0020), with
+        // Patina's frame (ADR-0030).
+        viewport: patina::frame::viewport(
+            egui::ViewportBuilder::default()
+                .with_title("UnAmp")
+                .with_app_id("unamp")
+                .with_icon(build_window_icon())
+                .with_inner_size([width, height])
+                .with_min_inner_size([800.0, 600.0]),
+            !config.system_title_bar,
+        ),
         ..Default::default()
     };
 

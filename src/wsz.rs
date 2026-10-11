@@ -361,10 +361,12 @@ mod tests {
         let text = to_toml("Squall \"Leonhart\"", "Squall.wsz", &c);
         let skin = crate::skin::Skin::parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
         assert_eq!(skin.name, "Squall \"Leonhart\"");
-        assert_eq!(skin.base, Some(crate::skin::Base::Dark));
+        assert_eq!(skin.base, Some(patina::skin::Base::Dark));
         assert!(skin.warnings.is_empty(), "{:?}", skin.warnings);
-        assert_eq!(skin.classic(), Some("Squall.wsz"));
-        let spectrum = skin.app.unamp.spectrum.unwrap();
+        let (section, warnings) = crate::skin::unamp_section(&skin);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(section.classic.as_deref(), Some("Squall.wsz"));
+        let spectrum = section.spectrum.unwrap();
         assert_eq!(spectrum.len(), 16);
         assert_eq!(spectrum[0].0, Color32::from_rgb(24, 132, 8));
         assert_eq!(spectrum[15].0, Color32::from_rgb(239, 49, 16));

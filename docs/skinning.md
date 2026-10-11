@@ -9,16 +9,21 @@ UnAmp has three kinds of skin, all chosen from the **Skins** menu:
 | **Classic skin** | A Winamp 2 `.wsz` plus the `.toml` UnAmp makes from it | Player, Equalizer and Playlist drawn from the skin's own bitmaps; everything else in its colours |
 
 Your choice is saved as `skin = "<name>"` in `~/.config/unamp/config.toml`. If that skin
-disappears, UnAmp falls back to Default.
+disappears, UnAmp falls back to Default. A saved `"Photograph"`, from before UnAmp moved onto
+[Patina](https://github.com/Sector-F-Labs/patina), now means Dark Orange.
+
+UnAmp reads skins through Patina, the shared frame and skin format of the suite (UnAmp, Photograph,
+Notebook, Calendar), so the same skins work in every one of those apps.
 
 ## Where skins live
 
-- **Built-in skins** are TOML files in the repo's [`skins/`](../skins) folder, compiled into the
-  binary. Today those are [`steam-classic.toml`](../skins/steam-classic.toml), which recreates the
-  olive-green Steam client and doubles as the commented reference for the format, and
-  [`photograph.toml`](../skins/photograph.toml), the dark greys and Ubuntu orange of Photograph.
-- **Your skins** go in `~/.config/unamp/skins/`. UnAmp reads every `*.toml` there, and converts
-  every `*.wsz` there (see [Classic skins](#classic-winamp-skins)).
+- **Built-in skins** come from Patina, compiled in: Steam Classic (the olive-green Steam client,
+  whose file doubles as the commented reference for the format), Dark Orange (the dark greys and
+  Ubuntu orange of Photograph, formerly UnAmp's "Photograph"), Calendar and Notebook. Patina's
+  [`skins/`](https://github.com/Sector-F-Labs/patina/tree/master/skins) folder holds them.
+- **Your skins** go in `~/.config/patina/skins/`, which every app in the suite reads, or in
+  UnAmp's own `~/.config/unamp/skins/`. UnAmp reads every `*.toml` in both, and converts every
+  `*.wsz` in both (see [Classic skins](#classic-winamp-skins)).
 
 A skin in your folder with the same `name` as a built-in **replaces** it. That's how you
 customize Steam Classic: **Skins → Copy built-in skins to folder** writes `steam-classic.toml` into
@@ -31,8 +36,8 @@ file, so running it again is safe. Delete your copy to go back to the built-in.
 |---|---|
 | *(skin names)* | Switch skin. Hover a user skin to see its file path. |
 | **Reload skins** | Rescan both folders, convert any new `.wsz`, and re-apply the current skin. Use it after editing. |
-| **Copy built-in skins to folder** | Put editable copies of the built-ins in your folder (never overwrites). |
-| **Open skins folder** | Open `~/.config/unamp/skins/` in your file manager, creating it if needed. |
+| **Copy built-in skins to folder** | Put editable copies of the built-ins in `~/.config/patina/skins/` (never overwrites). |
+| **Open skins folder** | Open `~/.config/patina/skins/` in your file manager, creating it if needed. |
 
 Problems loading a skin are listed in red at the bottom of the Skins menu. A bad colour, an
 old-format file or a broken `.wsz` means the skin is skipped. An unknown key is listed but the
@@ -172,7 +177,7 @@ rather than another `.wsz`.
 
 ### Installing one
 
-1. Put the `.wsz` in `~/.config/unamp/skins/` (**Skins → Open skins folder**).
+1. Put the `.wsz` in `~/.config/patina/skins/` (**Skins → Open skins folder**) or `~/.config/unamp/skins/`.
 2. **Skins → Reload skins**. UnAmp writes `<same name>.toml` next to it.
 3. Pick it from the Skins menu. The menu name is the file name; edit `name` in the TOML or rename
    the `.wsz` (before converting) for something tidier.
@@ -236,7 +241,7 @@ window shapes (so non-rectangular skins show square corners), custom cursors (`*
 | A new `.wsz` doesn't appear | Not reloaded yet (**Skins → Reload skins**), or it's still named `.zip`. |
 | A converted skin looks like plain colours | Its TOML has no `[app.unamp] classic` line. Delete the `.toml` and reload. |
 | "written in the old skin format" | The file predates format 1. See [Upgrading](#upgrading-from-the-old-skin-format). |
-| Edits don't show | Reload skins. Make sure you edited the file in `~/.config/unamp/skins/`, not the repo copy. |
+| Edits don't show | Reload skins. Make sure you edited the file in your skins folder (`~/.config/patina/skins/` or `~/.config/unamp/skins/`), not Patina's copy. |
 | My skin isn't in the menu | Check the red errors at the bottom of the Skins menu. |
 | A classic window is off-screen | **Windows → Reset layout**. |
 

@@ -69,6 +69,7 @@ mechanics of adding one.
 | [0027](0027-saved-playlists-in-toml-with-library-roots.md) | Save playlists as TOML in a marked library root, finding moved tracks by path then tags | Proposed (would supersede the format and location in [ADR-0013](0013-save-session-as-m3u.md)) |
 | [0028](0028-landing-page-and-crates-io.md) | Publish a landing page from `docs/` and the crate to crates.io on every release | Proposed (release steps superseded by [ADR-0025](0025-release-from-a-tag-with-ci-packages.md)) |
 | [0029](0029-album-sections-in-folder-view.md) | List album subfolders as sections of the folder view, one level deep | Accepted |
+| [0030](0030-build-on-patina.md) | Build on Patina: its frame, appearance watcher, skins and folder tree | Accepted |
 
 ## Decision Relationship
 
@@ -121,6 +122,9 @@ flowchart TD
     A --> AB[0028: Landing page, crates.io]
     AB --> Y
     C --> AD[0029: Album sections in folder view]
+    X --> AE[0030: Built on Patina]
+    T --> AE
+    N --> AE
     D --> AD
 ```
 
@@ -155,5 +159,6 @@ flowchart TD
 - winit/eframe start reporting the Linux system theme, or users want accent colours or high
   contrast followed — see [ADR-0019](0019-follow-desktop-color-scheme.md).
 - The own frame misbehaves on a desktop (no compositor, tiling WMs, missing shadows bother
-  people) — see [ADR-0020](0020-draw-own-window-frame.md); the system title bar is one click away.
+  people) — it's Patina's now, so fix it there (see [ADR-0030](0030-build-on-patina.md)); the
+  system title bar is one click away.
 - A third app wants mount discovery, or the two copies diverge — extract a crate ([ADR-0005](0005-reuse-photograph-mount-discovery.md)).

@@ -1,14 +1,12 @@
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use crate::appearance;
 use crate::classic::{self, ClassicSkin};
 use crate::command::{Command, PlaylistAction, Window, with_queue_marker};
 use crate::config::{AppConfig, Repeat};
 use crate::display;
 use crate::eq::{self, EqParams, EqSnapshot};
 use crate::eq_profiles::{self, Profiles};
-use crate::frame;
 use crate::layout::{self, Snapper};
 use crate::library::{self, Library, Track, TrackAction};
 use crate::metadata::{self, TrackInfo};
@@ -21,6 +19,7 @@ use crate::session;
 use crate::skin::{self, Palette, Skin};
 use crate::visualizer::Visualizer;
 use crate::waveform::{self, WaveColors, Waveforms};
+use patina::frame::{self, TitleBar};
 
 const SIDEBAR_WIDTH: f32 = 200.0;
 const ART_SIZE: f32 = 132.0;
@@ -104,15 +103,17 @@ impl UnAmpApp {
         };
         let visualizer = Visualizer::new(engine.tap());
         let (art_tx, art_rx) = mpsc::channel();
+        let mut config = config;
+        config.skin = skin::current_name(&config.skin).to_string();
         let (skins, mut skin_errors) = skin::load_all();
         let current = skins
             .iter()
             .find(|s| s.name == config.skin)
             .cloned()
             .unwrap_or_else(Skin::default_skin);
-        let palette = current.apply(&cc.egui_ctx);
+        let palette = skin::apply(&current, &cc.egui_ctx);
         let screenshot = Screenshot::from_env();
-        appearance::watch(&cc.egui_ctx);
+        patina::appearance::watch(&cc.egui_ctx);
         let classic = load_classic(&current, &cc.egui_ctx, &mut skin_errors);
         Self {
             config,
@@ -339,6 +340,9 @@ impl UnAmpApp {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
+            self.apply(Command::Quit, ctx);
+        }
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
             self.config.show_library = true;
             ctx.memory_mut(|m| m.request_focus(egui::Id::new(SEARCH_BOX)));
@@ -1248,7 +1252,7 @@ impl UnAmpApp {
             }
         }
         if let Some(skin) = chosen {
-            self.palette = skin.apply(ui.ctx());
+            self.palette = skin::apply(&skin, ui.ctx());
             self.classic = load_classic(&skin, ui.ctx(), &mut self.skin_errors);
             self.config.skin = skin.name;
         }
@@ -1257,7 +1261,7 @@ impl UnAmpApp {
         if ui.button("Reload skins").clicked() {
             self.reload_skins(ui.ctx());
         }
-        if let Some(dir) = skin::user_skins_dir() {
+        if let Some(dir) = patina::skin::shared_dir() {
             if ui
                 .button("Copy built-in skins to folder")
                 .on_hover_text(
@@ -1265,7 +1269,7 @@ impl UnAmpApp {
                 )
                 .clicked()
             {
-                self.skin_notice = Some(match skin::export_built_ins(&dir) {
+                self.skin_notice = Some(match patina::skin::export_built_ins(&dir, patina::skin::BUILT_IN) {
                     Ok(export) => {
                         // The copies share the built-ins' names, so after a
                         // reload they're the versions in use.
@@ -1470,7 +1474,7 @@ impl UnAmpApp {
             .cloned()
             .unwrap_or_else(Skin::default_skin);
         self.config.skin = current.name.clone();
-        self.palette = current.apply(ctx);
+        self.palette = skin::apply(&current, ctx);
         self.classic = load_classic(&current, ctx, &mut self.skin_errors);
     }
 
@@ -1491,7 +1495,7 @@ impl UnAmpApp {
             .iter()
             .find(|s| s.name == self.config.skin)
             .cloned();
-        self.palette = current.unwrap_or_else(Skin::default_skin).apply(ctx);
+        self.palette = skin::apply(&current.unwrap_or_else(Skin::default_skin), ctx);
         self.frame_theme = Some(theme);
         ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(match theme {
             egui::Theme::Dark => egui::SystemTheme::Dark,
@@ -1881,7 +1885,7 @@ fn marquee(ui: &mut egui::Ui, text: &str, scrolling: bool, color: egui::Color32)
 
 /// Loads the skin's classic `.wsz` (if it names one), noting failures.
 fn load_classic(skin: &Skin, ctx: &egui::Context, errors: &mut Vec<String>) -> Option<ClassicSkin> {
-    let file = skin.classic()?;
+    let file = skin::classic(skin)?;
     let path = skin.path.as_ref()?.parent()?.join(file);
     match ClassicSkin::load(&path, ctx) {
         Ok(classic) => Some(classic),
@@ -1970,15 +1974,29 @@ impl eframe::App for UnAmpApp {
         let title = self.window_title.clone();
         let frame_style = self.palette.frame;
         egui::Panel::top("menu")
-            .frame(
-                egui::Frame::side_top_panel(ui.style())
-                    .fill(frame_style.title_bar)
-                    // Photograph's header-bar padding, so the suite's title bars match.
-                    .inner_margin(egui::Margin::symmetric(12, 8))
-                    .corner_radius(egui::CornerRadius { nw: radius, ne: radius, sw: 0, se: 0 }),
-            )
+            .frame(frame::header_frame(ui.style(), &frame_style, radius))
             .show(ui, |ui| {
-                frame::title_bar(ui, &frame_style, &title, custom_frame, |ui| {
+                // Menus on the left. The right side, for a productivity app's
+                // output actions, stays empty: UnAmp is for listening
+                // (Patina's ADR-0006).
+                let left = |ui: &mut egui::Ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.add(egui::Button::new("Quit").shortcut_text("Ctrl+Q")).clicked() {
+                            ui.close();
+                            self.apply(Command::Quit, ctx);
+                        }
+                    });
+                    ui.menu_button("View", |ui| {
+                        if ui
+                            .checkbox(&mut self.config.system_title_bar, "System Title Bar")
+                            .on_hover_text("Let the desktop draw the window frame instead of the skin")
+                            .clicked()
+                        {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
+                                self.config.system_title_bar,
+                            ));
+                        }
+                    });
                     ui.menu_button("Windows", |ui| {
                         for (window, label) in [
                             (Window::Player, "Player"),
@@ -2014,19 +2032,13 @@ impl eframe::App for UnAmpApp {
                         {
                             self.snapper.snap_all();
                         }
-                        ui.separator();
-                        if ui
-                            .checkbox(&mut self.config.system_title_bar, "System title bar")
-                            .on_hover_text("Let the desktop draw the window frame instead of the skin")
-                            .clicked()
-                        {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(
-                                self.config.system_title_bar,
-                            ));
-                        }
                     });
                     ui.menu_button("Skins", |ui| self.show_skins_menu(ui));
-                });
+                };
+                TitleBar::new(&title, &frame_style)
+                    .custom(custom_frame)
+                    .menu_bar(true)
+                    .show(ui, left, |_| {});
             });
 
         egui::Panel::bottom("status")
@@ -2117,11 +2129,7 @@ impl eframe::App for UnAmpApp {
     /// Transparent behind UnAmp's own frame, so its rounded corners show the
     /// desktop; the panels paint everything else.
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
-        if self.config.system_title_bar {
-            visuals.panel_fill.to_normalized_gamma_f32()
-        } else {
-            [0.0; 4]
-        }
+        frame::clear_color(visuals, !self.config.system_title_bar)
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
