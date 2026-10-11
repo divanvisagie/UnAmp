@@ -2,6 +2,9 @@
 //! set to a PNG path, UnAmp starts playing the restored playlist, waits for
 //! the spectrum to fill, saves a screenshot of its window there and quits.
 //!
+//! The picture is always dark, whatever the desktop's light/dark setting,
+//! so the docs don't depend on the machine they were made on.
+//!
 //! The mode also keeps the user's machine out of the picture and the
 //! desktop out of the run: no mounted drives or network shares in the
 //! sidebar, and no MPRIS player in GNOME's media controls.
@@ -41,6 +44,9 @@ impl Screenshot {
         let now = ctx.input(|i| i.time);
         let Some(started) = self.started_at else {
             self.started_at = Some(now);
+            // Default follows the desktop; the appearance watcher only changes
+            // the fallback, so an explicit choice here sticks.
+            ctx.set_theme(egui::Theme::Dark);
             return Step::Play;
         };
         ctx.request_repaint();
