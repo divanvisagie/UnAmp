@@ -69,7 +69,8 @@ mechanics of adding one.
 | [0027](0027-saved-playlists-in-toml-with-library-roots.md) | Save playlists as TOML in a marked library root, finding moved tracks by path then tags | Proposed (would supersede the format and location in [ADR-0013](0013-save-session-as-m3u.md)) |
 | [0028](0028-landing-page-and-crates-io.md) | Publish a landing page from `docs/` and the crate to crates.io on every release | Proposed (release steps superseded by [ADR-0025](0025-release-from-a-tag-with-ci-packages.md)) |
 | [0029](0029-album-sections-in-folder-view.md) | List album subfolders as sections of the folder view, one level deep | Accepted |
-| [0030](0030-build-on-patina.md) | Build on Patina: its frame, appearance watcher, skins and folder tree | Accepted |
+| [0030](0030-build-on-patina.md) | Build on Patina: its frame, appearance watcher, skins and folder tree | Accepted; skins folder superseded by [0031](0031-own-skins-folder-again.md) |
+| [0031](0031-own-skins-folder-again.md) | Skins only from UnAmp's own folder, `~/.config/unamp/skins` | Accepted |
 
 ## Decision Relationship
 
@@ -123,6 +124,7 @@ flowchart TD
     AB --> Y
     C --> AD[0029: Album sections in folder view]
     X --> AE[0030: Built on Patina]
+    AE -->|skins folder superseded by| AF[0031: Own skins folder again]
     T --> AE
     N --> AE
     D --> AD

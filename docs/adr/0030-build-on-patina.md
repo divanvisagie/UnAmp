@@ -4,6 +4,8 @@ Date: 2026-10-11
 
 ## Status
 
+The skins folder is superseded by [ADR-0031](0031-own-skins-folder-again.md). The rest stands.
+
 Accepted: the user asked for UnAmp to be ported to Patina. The File/View/Windows/Skins menu
 layout follows Patina's ADR-0006, which the user set.
 

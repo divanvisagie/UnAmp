@@ -94,8 +94,7 @@ UnAmp starts with egui's stock look; pick another from the **Skins** menu.
 
 - **TOML skins** recolour everything. Steam Classic, Dark Orange, Calendar and Notebook come built
   in from [Patina](https://github.com/Sector-F-Labs/patina), the frame and skin format UnAmp shares
-  with Photograph and other apps. Write your own in `~/.config/patina/skins/` (read by every
-  Patina app) or `~/.config/unamp/skins/`, or use **Skins → Copy built-in skins to folder** for an
+  with Photograph and other apps. Write your own in `~/.config/unamp/skins/`, or use **Skins → Copy built-in skins to folder** for an
   annotated one to edit.
 - **Classic Winamp skins**: drop a `.wsz` in the same folder and reload. The Player, Equalizer
   and Playlist are drawn from the skin's own bitmaps, the way Winamp drew them. Find thousands at

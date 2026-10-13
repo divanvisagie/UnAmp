@@ -16,7 +16,7 @@ anyhow = "1.0.104"
 dirs = "7.0.0"
 eframe = { version = "0.35", features = ["persistence"] }
 egui = "0.35"
-patina-ui = "0.1.6"
+patina-ui = "0.1.7"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 lofty = "0.25.4"
 rodio = { version = "0.22.2", features = ["symphonia-all"] }

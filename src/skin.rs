@@ -108,10 +108,9 @@ pub fn apply(skin: &Skin, ctx: &egui::Context) -> Palette {
     palette(skin, &ctx.global_style().visuals)
 }
 
-/// UnAmp's own skins folder, where `.wsz` files are converted. Skins for
-/// every Patina app go in `patina::skin::shared_dir()`.
+/// UnAmp's own skins folder, where `.wsz` files are converted too.
 pub fn user_skins_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("unamp").join("skins"))
+    patina::skin::app_dir("unamp")
 }
 
 /// Skin names earlier versions saved, and what they're called now.
@@ -123,14 +122,13 @@ pub fn current_name(name: &str) -> &str {
     }
 }
 
-/// Default, Patina's built-ins, then the shared and UnAmp's own skins,
-/// sorted by name. A later skin with an earlier one's name replaces it.
+/// Default, Patina's built-ins, then UnAmp's own skins, sorted by name. A later skin with an earlier one's name replaces it.
 /// Returns the skins, and load errors and warnings to show.
 pub fn load_all() -> (Vec<Skin>, Vec<String>) {
     let mut errors = Vec::new();
-    let dirs: Vec<PathBuf> = patina::skin::shared_dir().into_iter().chain(user_skins_dir()).collect();
+    let dirs: Vec<PathBuf> = user_skins_dir().into_iter().collect();
     for dir in &dirs {
-        // Classic Winamp skins dropped in either folder become TOML first.
+        // Classic Winamp skins dropped in the folder become TOML first.
         errors.extend(crate::wsz::convert_new_in(dir));
     }
     let (skins, load_errors) = patina::skin::load_all(patina::skin::BUILT_IN, &dirs);

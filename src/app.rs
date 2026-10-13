@@ -1261,7 +1261,7 @@ impl UnAmpApp {
         if ui.button("Reload skins").clicked() {
             self.reload_skins(ui.ctx());
         }
-        if let Some(dir) = patina::skin::shared_dir() {
+        if let Some(dir) = skin::user_skins_dir() {
             if ui
                 .button("Copy built-in skins to folder")
                 .on_hover_text(
