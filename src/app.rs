@@ -1292,7 +1292,7 @@ impl UnAmpApp {
                 .clicked()
             {
                 let _ = std::fs::create_dir_all(&dir);
-                let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+                let _ = patina::open::path(&dir);
             }
         }
         if let Some(notice) = &self.skin_notice {
