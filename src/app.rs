@@ -2038,6 +2038,7 @@ impl eframe::App for UnAmpApp {
                 TitleBar::new(&title, &frame_style)
                     .custom(custom_frame)
                     .menu_bar(true)
+                    .span(frame::header_span(ui))
                     .show(ui, left, |_| {});
             });
 
