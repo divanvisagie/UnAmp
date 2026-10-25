@@ -44,7 +44,7 @@ mechanics of adding one.
 | [0002](0002-stock-egui-style.md) | Use egui's stock style instead of a custom theme | Superseded by [ADR-0008](0008-toml-skins.md) |
 | [0003](0003-browse-folders-no-library-database.md) | Browse folders directly instead of scanning into a library database | Proposed (no-search consequence superseded by [ADR-0015](0015-search-by-walking.md)) |
 | [0004](0004-file-io-off-ui-thread.md) | Keep track I/O off the UI thread, with rodio/symphonia for playback and lofty for tags | Proposed |
-| [0005](0005-reuse-photograph-mount-discovery.md) | Copy Photograph's mount discovery rather than sharing a crate | Proposed |
+| [0005](0005-reuse-photograph-mount-discovery.md) | Copy Photograph's mount discovery rather than sharing a crate | Proposed; GVfs discovery superseded by [0032](0032-browse-and-mount-network-shares-through-gvfs.md) |
 | [0006](0006-floating-egui-windows.md) | Use floating egui windows for the player, equalizer, playlist and media library | Accepted |
 | [0007](0007-biquad-equalizer-in-source-chain.md) | Implement the equalizer as peaking biquads in a rodio `Source`, ahead of the visualizer tap | Proposed |
 | [0008](0008-toml-skins.md) | Support skins as TOML files, keeping stock egui as the default | Accepted (bitmap exclusion superseded by [ADR-0010](0010-classic-wsz-renderer.md); file layout by [ADR-0024](0024-suite-theme-format.md)) |
@@ -71,6 +71,7 @@ mechanics of adding one.
 | [0029](0029-album-sections-in-folder-view.md) | List album subfolders as sections of the folder view, one level deep | Accepted |
 | [0030](0030-build-on-patina.md) | Build on Patina: its frame, appearance watcher, skins and folder tree | Accepted; skins folder superseded by [0031](0031-own-skins-folder-again.md) |
 | [0031](0031-own-skins-folder-again.md) | Skins only from UnAmp's own folder, `~/.config/unamp/skins` | Accepted |
+| [0032](0032-browse-and-mount-network-shares-through-gvfs.md) | Browse and mount network shares through GVfs, as Photograph and Files do | Accepted |
 
 ## Decision Relationship
 
@@ -125,6 +126,7 @@ flowchart TD
     C --> AD[0029: Album sections in folder view]
     X --> AE[0030: Built on Patina]
     AE -->|skins folder superseded by| AF[0031: Own skins folder again]
+    E -->|GVfs discovery superseded by| AG[0032: Network shares through GVfs]
     T --> AE
     N --> AE
     D --> AD

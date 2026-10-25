@@ -8,6 +8,7 @@ use std::sync::{Arc, mpsc};
 
 use crate::locations::{self, Location};
 use crate::metadata::{self, TrackInfo};
+use crate::network::{self, Network};
 use crate::search::Search;
 use patina::tree::FolderTree;
 
@@ -117,6 +118,37 @@ pub struct Library {
     /// The folder of the search result last clicked, which the tree
     /// highlights instead of the current folder while searching.
     search_focus: Option<PathBuf>,
+    /// GVfs, for the network's servers and shares (ADR-0032).
+    network: Network,
+    /// Network shares mounted through GVfs, by UnAmp or anything else.
+    network_mounts: Vec<network::Mount>,
+    /// Shown in place of the tracks while browsing the network or a server.
+    network_view: Option<NetworkView>,
+    /// A share being mounted, to open once it is.
+    connecting: Option<String>,
+    /// Servers' questions, answered one at a time.
+    asking: Vec<Asking>,
+    /// Why the last connection or unmount failed, shown in the status bar.
+    pub network_error: Option<String>,
+}
+
+/// The network's servers, or a server's shares.
+struct NetworkView {
+    uri: String,
+    /// `None` while GVfs looks.
+    listing: Option<Result<Vec<network::Place>, String>>,
+}
+
+/// A server's question for the user, being answered.
+struct Asking {
+    ask: network::Ask,
+    user: String,
+    domain: String,
+    password: String,
+    anonymous: bool,
+    save: network::Save,
+    /// Whether a field has been given the keys.
+    focused: bool,
 }
 
 impl Library {
@@ -147,6 +179,12 @@ impl Library {
             tree: FolderTree::new(dir.clone(), String::new()),
             search: Search::default(),
             search_focus: None,
+            network: Network::new(ctx),
+            network_mounts: Vec::new(),
+            network_view: None,
+            connecting: None,
+            asking: Vec::new(),
+            network_error: None,
         };
         lib.scan_locations();
         let (root, label) = lib.location_for(&lib.current_dir);
@@ -170,6 +208,9 @@ impl Library {
         for loc in self.storage_locations.iter().chain(&self.network_locations) {
             out.push((loc.path.clone(), loc.label.clone()));
         }
+        for mount in &self.network_mounts {
+            out.push((mount.path.clone(), mount.name.clone()));
+        }
         out
     }
 
@@ -184,8 +225,23 @@ impl Library {
     }
 
     /// The tracks the list shows: search results while searching, else the folder's.
+    /// None while the network is shown, so nothing plays from the folder
+    /// behind it.
     pub fn visible_tracks(&self) -> &[Track] {
-        if self.search.is_active() { &self.search.tracks } else { &self.tracks }
+        if self.search.is_active() {
+            &self.search.tracks
+        } else if self.network_view.is_some() {
+            &[]
+        } else {
+            &self.tracks
+        }
+    }
+
+    /// What the track list's header says while the network or a server is
+    /// shown in its place.
+    pub fn network_title(&self) -> Option<&str> {
+        let view = self.network_view.as_ref()?;
+        Some(if view.uri == network::ROOT { "Network" } else { &view.uri })
     }
 
     fn scan_locations(&mut self) {
@@ -194,8 +250,7 @@ impl Library {
             return;
         }
         let home = dirs::home_dir();
-        let (storage, mut network) = locations::mounted_locations(home.as_deref());
-        network.extend(locations::gvfs_locations());
+        let (storage, network) = locations::mounted_locations(home.as_deref());
         self.storage_locations = storage;
         self.network_locations = network;
     }
@@ -292,9 +347,99 @@ impl Library {
         self.pending_nav = Some(dir);
     }
 
+    /// Opens a URI: the network or a server is listed in place of the
+    /// tracks, and a share is mounted, then opened as a folder.
+    fn open_uri(&mut self, uri: &str) {
+        let uri = uri.trim().to_string();
+        self.network_error = None;
+        if network::is_listing(&uri) {
+            self.path_edit = uri.clone();
+            self.path_error = None;
+            self.network.list(&uri);
+            self.network_view = Some(NetworkView { uri, listing: None });
+        } else {
+            self.network.mount(&uri);
+            self.connecting = Some(uri);
+        }
+    }
+
+    /// The GVfs share whose folder is `dir`, if it's one's top.
+    fn mount_at(&self, dir: &Path) -> Option<&network::Mount> {
+        self.network_mounts.iter().find(|m| m.path == dir)
+    }
+
+    fn network_event(&mut self, event: network::Event) {
+        match event {
+            network::Event::Listed { uri, result } => {
+                if let Some(view) = self.network_view.as_mut().filter(|v| v.uri == uri) {
+                    view.listing = Some(result);
+                }
+            }
+            network::Event::Mounted { uri, result } => {
+                if self.connecting.as_ref() != Some(&uri) {
+                    return;
+                }
+                self.connecting = None;
+                match result {
+                    Ok(path) => self.navigate(path),
+                    Err(Some(e)) => {
+                        self.network_error = Some(format!("Couldn't connect to {uri}: {e}"))
+                    }
+                    Err(None) => {}
+                }
+            }
+            network::Event::Unmounted { result } => {
+                if let Err(Some(e)) = result {
+                    self.network_error = Some(format!("Couldn't unmount: {e}"));
+                }
+            }
+            network::Event::Mounts(mounts) => {
+                // Out of a share that's gone, to its server.
+                let gone = self
+                    .network_mounts
+                    .iter()
+                    .find(|m| {
+                        self.network_view.is_none()
+                            && self.current_dir.starts_with(&m.path)
+                            && !mounts.iter().any(|n| n.path == m.path)
+                    })
+                    .map(|m| network::server_of(&m.uri));
+                // Screenshots for the docs shouldn't show the user's shares.
+                if crate::screenshot::requested().is_none() {
+                    self.network_mounts = mounts;
+                }
+                if let Some(server) = gone {
+                    self.open_uri(&server);
+                }
+            }
+            network::Event::Ask(ask) => {
+                let (user, domain) = match &ask.kind {
+                    network::AskKind::Password { user, domain, .. } => {
+                        (user.clone(), domain.clone())
+                    }
+                    network::AskKind::Question(_) => Default::default(),
+                };
+                self.asking.push(Asking {
+                    ask,
+                    user,
+                    domain,
+                    password: String::new(),
+                    anonymous: false,
+                    save: network::Save::ForSession,
+                    focused: false,
+                });
+            }
+            network::Event::Withdrawn(id) => self.asking.retain(|a| a.ask.id != id),
+        }
+    }
+
     /// Applies pending navigation and incoming tags. Call once per frame.
     pub fn poll(&mut self, ctx: &egui::Context) {
+        for event in self.network.events() {
+            self.network_event(event);
+        }
         if let Some(dir) = self.pending_nav.take() {
+            self.network_view = None;
             self.search_focus = None;
             self.current_dir = dir;
             self.path_edit = self.current_dir.display().to_string();
@@ -349,8 +494,10 @@ impl Library {
             places.push((music, "\u{1F3B5}", "Music"));
         }
         places.push((PathBuf::from("/"), "\u{1F4BB}", "Computer"));
+        // Nothing local is current while the network is shown.
+        let local = self.network_view.is_none();
         for (path, icon, label) in places {
-            let is_current = path == self.tree.root();
+            let is_current = local && path == self.tree.root();
             if ui
                 .selectable_label(is_current, format!("{icon} {label}"))
                 .on_hover_text(path.display().to_string())
@@ -362,18 +509,12 @@ impl Library {
         }
         ui.add_space(8.0);
 
-        for (heading, icon, list) in [
-            ("STORAGE", "\u{1F4BE}", &self.storage_locations),
-            ("NETWORK", "\u{1F310}", &self.network_locations),
-        ] {
-            if list.is_empty() {
-                continue;
-            }
-            ui.label(egui::RichText::new(heading).weak().small());
-            for loc in list {
-                let is_current = loc.path == self.tree.root();
+        if !self.storage_locations.is_empty() {
+            ui.label(egui::RichText::new("STORAGE").weak().small());
+            for loc in &self.storage_locations {
+                let is_current = local && loc.path == self.tree.root();
                 if ui
-                    .selectable_label(is_current, format!("{icon} {}", loc.label))
+                    .selectable_label(is_current, format!("\u{1F4BE} {}", loc.label))
                     .on_hover_text(&loc.detail)
                     .clicked()
                 {
@@ -384,18 +525,87 @@ impl Library {
             ui.add_space(8.0);
         }
 
+        // The network through GVfs, Linux's (ADR-0032), then what's mounted:
+        // classic mounts, then GVfs shares, which can be unmounted here.
+        let browsable = cfg!(target_os = "linux");
+        if browsable || !self.network_locations.is_empty() {
+            ui.label(egui::RichText::new("NETWORK").weak().small());
+        }
+        let mut open_uri: Option<String> = None;
+        let mut unmount: Option<String> = None;
+        if browsable
+            && ui
+                .selectable_label(!local, "\u{1F5A7} Network")
+                .on_hover_text("Servers on the network, and their shares")
+                .clicked()
+        {
+            open_uri = Some(network::ROOT.to_string());
+        }
+        for loc in &self.network_locations {
+            let is_current = local && loc.path == self.tree.root();
+            if ui
+                .selectable_label(is_current, format!("\u{1F310} {}", loc.label))
+                .on_hover_text(&loc.detail)
+                .clicked()
+            {
+                new_root = Some((loc.path.clone(), loc.label.clone()));
+                nav_to = Some(loc.path.clone());
+            }
+        }
+        for mount in &self.network_mounts {
+            let is_current = local && mount.path == self.tree.root();
+            // The unmount button first, at the right, so a long name is cut
+            // short before it rather than pushing it out.
+            let row = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+            ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(egui::Button::new("\u{23CF}").frame(false))
+                    .on_hover_text(format!("Unmount {}", mount.name))
+                    .clicked()
+                {
+                    unmount = Some(mount.uri.clone());
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if ui
+                        .selectable_label(is_current, format!("\u{1F310} {}", mount.name))
+                        .on_hover_text(&mount.uri)
+                        .clicked()
+                    {
+                        new_root = Some((mount.path.clone(), mount.name.clone()));
+                        nav_to = Some(mount.path.clone());
+                    }
+                });
+            });
+        }
+        if let Some(uri) = &self.connecting {
+            ui.label(egui::RichText::new(format!("Connecting to {uri}\u{2026}")).weak().small());
+        }
+        if browsable || !self.network_locations.is_empty() {
+            ui.add_space(8.0);
+        }
+
         ui.separator();
         ui.add_space(4.0);
 
         // Editable path bar + up button
         ui.horizontal(|ui| {
-            let has_parent = self.current_dir.parent().is_some();
+            // Up from a share's top is its server, and from a server the network.
+            let up_uri = match &self.network_view {
+                Some(view) if view.uri != network::ROOT => Some(network::server_of(&view.uri)),
+                Some(_) => None,
+                None => self
+                    .mount_at(&self.current_dir)
+                    .map(|m| network::server_of(&m.uri)),
+            };
+            let has_parent = up_uri.is_some() || (local && self.current_dir.parent().is_some());
             if ui
                 .add_enabled(has_parent, egui::Button::new("\u{2B06}"))
                 .on_hover_text("Parent folder")
                 .clicked()
             {
-                if let Some(p) = self.current_dir.parent() {
+                if let Some(uri) = up_uri {
+                    open_uri = Some(uri);
+                } else if let Some(p) = self.current_dir.parent() {
                     nav_to = Some(p.to_path_buf());
                 }
             }
@@ -405,7 +615,12 @@ impl Library {
                     .desired_width(ui.available_width())
                     .font(egui::TextStyle::Monospace),
             );
-            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if resp.lost_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                && network::is_uri(&self.path_edit)
+            {
+                open_uri = Some(self.path_edit.trim().to_string());
+            } else if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 let candidate =
                     locations::expand_typed_path(&self.path_edit, dirs::home_dir().as_deref());
                 if candidate.is_dir() {
@@ -433,6 +648,7 @@ impl Library {
         ui.label(egui::RichText::new("FOLDERS").weak().small());
         let highlight = match &self.search_focus {
             Some(folder) if self.search.is_active() => folder,
+            _ if !local => Path::new(""),
             _ => &self.current_dir,
         };
         if let Some(path) = self.tree.show(ui, highlight) {
@@ -445,12 +661,191 @@ impl Library {
         if let Some(nav) = nav_to {
             self.navigate(nav);
         }
+        if let Some(uri) = open_uri {
+            self.open_uri(&uri);
+        }
+        if let Some(uri) = unmount {
+            self.network.unmount(&uri);
+        }
+    }
+
+    /// The network's servers or a server's shares, as rows: a server opens
+    /// its shares, a share mounts and opens.
+    fn show_network(&mut self, ui: &mut egui::Ui) {
+        let Some(view) = &self.network_view else {
+            return;
+        };
+        let mut open: Option<String> = None;
+        match &view.listing {
+            None => {
+                ui.centered_and_justified(|ui| ui.label("Looking\u{2026}"));
+            }
+            Some(Err(e)) => {
+                ui.centered_and_justified(|ui| ui.label(format!("Can't list {}: {e}", view.uri)));
+            }
+            Some(Ok(places)) if places.iter().all(|p| p.hidden()) => {
+                ui.centered_and_justified(|ui| {
+                    ui.label(if view.uri == network::ROOT {
+                        "No servers found. Type one into the path bar, as smb://host/"
+                    } else {
+                        "No shares on this server"
+                    })
+                });
+            }
+            Some(Ok(places)) => {
+                let shown: Vec<&network::Place> = places.iter().filter(|p| !p.hidden()).collect();
+                egui::ScrollArea::vertical()
+                    .id_salt("network_rows")
+                    .auto_shrink([false, false])
+                    .show_rows(ui, ROW_HEIGHT, shown.len(), |ui, range| {
+                        for i in range {
+                            let place = shown[i];
+                            let connecting = self.connecting.as_ref() == Some(&place.uri);
+                            if place_row(ui, i, place, connecting)
+                                .on_hover_text(&place.uri)
+                                .clicked()
+                            {
+                                open = Some(place.uri.clone());
+                            }
+                        }
+                    });
+            }
+        }
+        if let Some(uri) = open {
+            self.open_uri(&uri);
+        }
+    }
+
+    /// A server's question: a password, as Nautilus asks for one, or a
+    /// choice such as whether to trust a host.
+    pub fn show_dialogs(&mut self, ctx: &egui::Context) {
+        let Some(asking) = self.asking.first_mut() else {
+            return;
+        };
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::new(("ask", asking.ask.id))).show(ctx, |ui| {
+            ui.set_width(380.0);
+            let mut lines = asking.ask.message.lines().filter(|l| !l.trim().is_empty());
+            ui.heading(lines.next().unwrap_or("Connect"));
+            for line in lines {
+                ui.label(line);
+            }
+            ui.add_space(8.0);
+            match &asking.ask.kind {
+                network::AskKind::Password {
+                    need_user,
+                    need_domain,
+                    need_password,
+                    anonymous,
+                    can_save,
+                    ..
+                } => {
+                    if *anonymous {
+                        ui.horizontal(|ui| {
+                            ui.radio_value(&mut asking.anonymous, false, "Registered user");
+                            ui.radio_value(&mut asking.anonymous, true, "Anonymous");
+                        });
+                        ui.add_space(4.0);
+                    }
+                    ui.add_enabled_ui(!asking.anonymous, |ui| {
+                        // The keys go to the first field that wants something.
+                        let mut focus = !std::mem::replace(&mut asking.focused, true);
+                        egui::Grid::new("credentials")
+                            .num_columns(2)
+                            .spacing([8.0, 6.0])
+                            .show(ui, |ui| {
+                                let mut field =
+                                    |ui: &mut egui::Ui, label: &str, text: &mut String, password: bool| {
+                                        ui.label(label);
+                                        let resp = ui.add(
+                                            egui::TextEdit::singleline(text)
+                                                .password(password)
+                                                .desired_width(260.0),
+                                        );
+                                        if focus && (text.is_empty() || password) {
+                                            resp.request_focus();
+                                            focus = false;
+                                        }
+                                        ui.end_row();
+                                    };
+                                if *need_user {
+                                    field(ui, "Username", &mut asking.user, false);
+                                }
+                                if *need_domain {
+                                    field(ui, "Domain", &mut asking.domain, false);
+                                }
+                                if *need_password {
+                                    field(ui, "Password", &mut asking.password, true);
+                                }
+                            });
+                        if *can_save {
+                            ui.add_space(6.0);
+                            ui.radio_value(
+                                &mut asking.save,
+                                network::Save::Never,
+                                "Forget password immediately",
+                            );
+                            ui.radio_value(
+                                &mut asking.save,
+                                network::Save::ForSession,
+                                "Remember until you log out",
+                            );
+                            ui.radio_value(
+                                &mut asking.save,
+                                network::Save::Permanently,
+                                "Remember forever",
+                            );
+                        }
+                    });
+                    ui.add_space(12.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Connect").clicked()
+                            || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        {
+                            answer = Some(network::Answer::Password {
+                                anonymous: asking.anonymous,
+                                user: asking.user.clone(),
+                                domain: asking.domain.clone(),
+                                password: std::mem::take(&mut asking.password),
+                                save: asking.save,
+                            });
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answer = Some(network::Answer::Cancel);
+                        }
+                    });
+                }
+                network::AskKind::Question(choices) => {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        for (i, choice) in choices.iter().enumerate().rev() {
+                            if ui.button(choice).clicked() {
+                                answer = Some(network::Answer::Choice(i));
+                            }
+                        }
+                    });
+                }
+            }
+        });
+        if modal.should_close() {
+            answer = answer.or(Some(network::Answer::Cancel));
+        }
+        if let Some(answer) = answer {
+            let asking = self.asking.remove(0);
+            if matches!(answer, network::Answer::Cancel) && self.asking.is_empty() {
+                self.connecting = None;
+            }
+            self.network.answer(asking.ask.id, answer);
+        }
     }
 
     /// Renders the current folder's tracks, or the search results while
     /// searching. Double-click plays the list from that track; the context
     /// menu queues or adds to the playlist instead.
     pub fn show_tracks(&mut self, ui: &mut egui::Ui, playing: Option<&Path>) -> Option<TrackAction> {
+        if self.network_view.is_some() {
+            self.show_network(ui);
+            return None;
+        }
         let searching = self.search.is_active();
         if searching && self.search.tracks.is_empty() {
             ui.centered_and_justified(|ui| {
@@ -680,6 +1075,35 @@ fn section_header(ui: &mut egui::Ui, name: &str, tracks: &[Track]) -> egui::Resp
 
 /// A subfolder row in the track list: folder icon and name, opened with
 /// a single click like the tree.
+/// A server or share in the network view, drawn as a folder row is.
+fn place_row(
+    ui: &mut egui::Ui,
+    row: usize,
+    place: &network::Place,
+    connecting: bool,
+) -> egui::Response {
+    let width = ui.available_width();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), egui::Sense::click());
+    let visuals = ui.visuals();
+    let painter = ui.painter_at(rect);
+    if resp.hovered() {
+        painter.rect_filled(rect, visuals.widgets.inactive.corner_radius, visuals.widgets.hovered.weak_bg_fill);
+    } else if row % 2 == 1 {
+        painter.rect_filled(rect, 0.0, visuals.faint_bg_color);
+    }
+    let icon = if place.is_server() { "\u{1F5A7}" } else { "\u{1F4C1}" };
+    let suffix = if connecting { "  \u{2026}" } else { "" };
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    painter.text(
+        egui::pos2(rect.left() + 54.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        format!("{icon} {}{suffix}", place.name),
+        body,
+        visuals.text_color(),
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 fn folder_row(ui: &mut egui::Ui, row: usize, name: &str) -> egui::Response {
     let width = ui.available_width();
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), egui::Sense::click());

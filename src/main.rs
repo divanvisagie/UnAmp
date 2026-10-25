@@ -10,6 +10,7 @@ mod library;
 mod locations;
 mod metadata;
 mod mpris;
+mod network;
 mod player;
 mod playlist;
 mod reorder;

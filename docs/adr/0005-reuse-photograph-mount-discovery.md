@@ -4,7 +4,9 @@ Date: 2026-10-09
 
 ## Status
 
-Proposed
+Proposed. Its GVfs discovery is superseded by
+[ADR-0032](0032-browse-and-mount-network-shares-through-gvfs.md), which finds GVfs shares through
+GIO and mounts them too.
 
 ## Context
 

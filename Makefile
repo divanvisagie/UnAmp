@@ -107,7 +107,8 @@ build-deb: ## Build the .deb into target/deb/
 		"Priority: optional" \
 		"Architecture: $(ARCH)" \
 		"Maintainer: Divan Visagie <me@divanv.com>" \
-		"Depends: libc6, libgcc-s1, libasound2t64 | libasound2" \
+		"Depends: libc6, libgcc-s1, libasound2t64 | libasound2, libglib2.0-0t64 | libglib2.0-0" \
+		"Recommends: gvfs-backends, gvfs-fuse" \
 		"Description: UnAmp music player" \
 		" Native Rust/egui music player for local folders and network shares." \
 		> "$(PKG_ROOT)/DEBIAN/control"

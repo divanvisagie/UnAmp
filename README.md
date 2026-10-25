@@ -51,7 +51,7 @@ release also ships an unsigned macOS `.dmg`, built automatically ([ADR-0025](doc
   every word against their paths, streaming results as it goes, no scan or database needed
   ([ADR-0015](docs/adr/0015-search-by-walking.md))
 - Media Library: a collapsible folder tree that loads as you expand it, so slow shares never
-  freeze the window ([ADR-0014](docs/adr/0014-lazy-folder-tree.md)); the sidebar lists mounted drives, ZFS pools and network shares (NFS/SMB/sshfs/GVfs)
+  freeze the window ([ADR-0014](docs/adr/0014-lazy-folder-tree.md)); the sidebar lists mounted drives, ZFS pools and network shares (NFS/SMB/sshfs/GVfs), and browses and mounts SMB shares on the network through GVfs, asking for a password when a server wants one (`smb://` URIs work in the path bar)
 - Plays MP3, FLAC, Ogg Vorbis, WAV, AAC/ALAC (`.m4a`), AIFF, CAF and MKA via symphonia
 - Reads tags (title, artist, album, track number, duration, bitrate) for the folder you're viewing
 - Album art from embedded covers, or `cover`/`folder`/`front`/`album` images beside the tracks
@@ -127,14 +127,14 @@ Mounted-drive discovery, network shares in the sidebar and media keys are Linux-
 ### From crates.io
 
 ```bash
-sudo apt install -y libasound2-dev pkg-config
+sudo apt install -y libasound2-dev libglib2.0-dev pkg-config
 cargo install unamp
 ```
 
 ### From Source
 
 ```bash
-sudo apt install -y libasound2-dev pkg-config
+sudo apt install -y libasound2-dev libglib2.0-dev pkg-config
 cargo run --release
 ```
 

@@ -16,7 +16,7 @@ anyhow = "1.0.104"
 dirs = "7.0.0"
 eframe = { version = "0.35", features = ["persistence"] }
 egui = "0.35"
-patina-ui = "0.1.11"
+patina-ui = "0.1.12"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 lofty = "0.25.4"
 rodio = { version = "0.22.2", features = ["symphonia-all"] }
@@ -26,6 +26,11 @@ serde_ignored = "0.1"
 toml = "1.1.8"
 zbus = "5"
 zip = { version = "9.0.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+# GVfs, for browsing and mounting network shares (ADR-0032).
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.22"
+async-channel = "2"
 
 [profile.release]
 opt-level = 3

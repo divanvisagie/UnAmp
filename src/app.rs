@@ -770,6 +770,8 @@ impl UnAmpApp {
                         .strong()
                         .size(16.0),
                 );
+            } else if let Some(title) = self.library.network_title() {
+                ui.label(egui::RichText::new(title).strong().size(16.0));
             } else {
                 let name = self
                     .library
@@ -2072,7 +2074,8 @@ impl eframe::App for UnAmpApp {
                         .error
                         .as_ref()
                         .or(self.session_error.as_ref())
-                        .or(self.eq_profiles_error.as_ref());
+                        .or(self.eq_profiles_error.as_ref())
+                        .or(self.library.network_error.as_ref());
                     if error.is_some() || self.engine.state() == PlayState::Loading {
                         ui.separator();
                     }
@@ -2082,6 +2085,7 @@ impl eframe::App for UnAmpApp {
                         .as_ref()
                         .or(self.session_error.as_ref())
                         .or(self.eq_profiles_error.as_ref())
+                        .or(self.library.network_error.as_ref())
                     {
                         ui.colored_label(ui.visuals().error_fg_color, err);
                     } else if self.engine.state() == PlayState::Loading {
@@ -2125,6 +2129,7 @@ impl eframe::App for UnAmpApp {
         if custom_frame {
             frame::edges(ctx, radius, self.palette.frame.border);
         }
+        self.library.show_dialogs(ctx);
     }
 
     /// Transparent behind UnAmp's own frame, so its rounded corners show the
