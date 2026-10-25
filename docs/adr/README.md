@@ -72,6 +72,7 @@ mechanics of adding one.
 | [0030](0030-build-on-patina.md) | Build on Patina: its frame, appearance watcher, skins and folder tree | Accepted; skins folder superseded by [0031](0031-own-skins-folder-again.md) |
 | [0031](0031-own-skins-folder-again.md) | Skins only from UnAmp's own folder, `~/.config/unamp/skins` | Accepted |
 | [0032](0032-browse-and-mount-network-shares-through-gvfs.md) | Browse and mount network shares through GVfs, as Photograph and Files do | Accepted |
+| [0033](0033-converted-skins-are-checked-for-contrast.md) | Converted `.wsz` skins are checked for contrast, and old conversions redone once | Accepted |
 
 ## Decision Relationship
 
@@ -87,6 +88,7 @@ flowchart TD
     B --> H[0008: TOML skins]
     H --> I[0009: Convert .wsz colours to TOML]
     I --> J[0010: Classic .wsz renderer]
+    I --> AH[0033: Converted skins checked for contrast]
     F --> J
     H --> K[0011: Built-in skins compiled in, copy out]
     C --> L[0012: Up-next queue]

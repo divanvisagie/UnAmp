@@ -6,6 +6,10 @@
 //! - `viscolor.txt`: the analyzer background, bar gradient and peak dots
 //! - `numbers.bmp` / `nums_ex.bmp`: the time digits' colour
 //! - `main.bmp`: the main window's overall tone, for window backgrounds
+//!
+//! Skins pair their colours for Winamp's own bitmaps, not for egui's
+//! panels, so every text colour is checked against what it's drawn on and
+//! moved until it can be read (ADR-0033).
 
 use std::collections::HashMap;
 use std::io::{Read, Seek};
@@ -143,6 +147,89 @@ fn average(img: &image::RgbImage) -> Option<Color32> {
     Some(Color32::from_rgb((r / n) as u8, (g / n) as u8, (b / n) as u8))
 }
 
+/// WCAG's relative luminance, from linear light.
+fn relative_luminance(c: Color32) -> f32 {
+    let linear = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * linear(c.r()) + 0.7152 * linear(c.g()) + 0.0722 * linear(c.b())
+}
+
+/// WCAG's contrast ratio, from 1 (none) to 21 (black on white).
+fn contrast(a: Color32, b: Color32) -> f32 {
+    let (a, b) = (relative_luminance(a), relative_luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// Contrast WCAG asks of body text.
+const TEXT_CONTRAST: f32 = 4.5;
+/// Contrast for weak text and large text, WCAG's minimum for either.
+const WEAK_CONTRAST: f32 = 3.0;
+/// How far a list's background may move toward black or white before its
+/// text has to change instead.
+const MAX_SURFACE_SHIFT: f32 = 0.5;
+
+/// The least contrast `fg` has against any of `bgs`.
+fn worst(fg: Color32, bgs: &[Color32]) -> f32 {
+    bgs.iter().map(|&bg| contrast(fg, bg)).fold(f32::INFINITY, f32::min)
+}
+
+/// `colour`, mixed toward white or black, whichever gets there in the
+/// smaller step, until `score` reaches `min`; if neither does, the mix that
+/// scored best.
+fn nearest(colour: Color32, score: impl Fn(Color32) -> f32, min: f32) -> Color32 {
+    let mut best = colour;
+    if score(colour) >= min {
+        return colour;
+    }
+    for step in 1..=20 {
+        let t = step as f32 / 20.0;
+        for end in [Color32::WHITE, Color32::BLACK] {
+            let c = mix(colour, end, t);
+            if score(c) >= min {
+                return c;
+            }
+            if score(c) > score(best) {
+                best = c;
+            }
+        }
+    }
+    best
+}
+
+/// `fg`, changed as little as it takes to read on every one of `bgs`.
+fn readable(fg: Color32, bgs: &[Color32], min: f32) -> Color32 {
+    nearest(fg, |c| worst(c, bgs), min)
+}
+
+/// `bg`, changed as little as it takes for `fg` to read on it.
+fn behind(bg: Color32, fg: Color32, min: f32) -> Color32 {
+    nearest(bg, |c| contrast(fg, c), min)
+}
+
+/// The playlist's own pair, text on its background, made readable: the
+/// background moves away from the text first, up to `MAX_SURFACE_SHIFT`,
+/// since the text colour is what a skin is recognised by; then the text.
+fn separate(fg: Color32, bg: Color32, min: f32) -> (Color32, Color32) {
+    if contrast(fg, bg) >= min {
+        return (fg, bg);
+    }
+    let away = if relative_luminance(fg) >= relative_luminance(bg) {
+        Color32::BLACK
+    } else {
+        Color32::WHITE
+    };
+    let mut shifted = bg;
+    for step in 1..=10 {
+        shifted = mix(bg, away, MAX_SURFACE_SHIFT * step as f32 / 10.0);
+        if contrast(fg, shifted) >= min {
+            return (fg, shifted);
+        }
+    }
+    (readable(fg, &[shifted], min), shifted)
+}
+
 fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
@@ -155,20 +242,62 @@ fn hex(c: Color32) -> String {
 /// The first line of every converted file, so an outdated conversion can
 /// be recognised and redone (see `convert_new_in`).
 const HEADER: &str = "# Converted from the Winamp skin";
+/// In every conversion whose colours were checked for contrast (ADR-0033).
+const CONTRAST_CHECKED: &str = "# Text colours are checked for contrast";
 
 /// Writes a theme TOML (format `skin::FORMAT`) from extracted colours.
 /// `name` becomes the skin's menu name; `source` is noted in the header.
 pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
-    // Window background: the main window's tone, else the playlist's.
-    let background = c.main_tone.or(c.normal_bg);
+    // The playlist's text on its background, readable first: the rest are
+    // checked against these.
+    let (text, surface) = match (c.normal, c.normal_bg) {
+        (Some(fg), Some(bg)) => {
+            let (fg, bg) = separate(fg, bg, TEXT_CONTRAST);
+            (Some(fg), Some(bg))
+        }
+        pair => pair,
+    };
+    // Window background: the main window's tone, else the playlist's, made
+    // dark or light enough for the text.
+    let background = match (c.main_tone.or(surface), text) {
+        (Some(bg), Some(fg)) => Some(behind(bg, fg, TEXT_CONTRAST)),
+        (bg, _) => bg,
+    };
     let dark = background.is_none_or(|bg| luminance(bg) < 0.5);
     let toward = if dark { Color32::WHITE } else { Color32::BLACK };
+    let hover = background.map(|bg| mix(bg, toward, 0.12));
+    let surface_alt = surface.zip(text).map(|(bg, fg)| behind(mix(bg, fg, 0.06), fg, TEXT_CONTRAST));
+    let panels: Vec<Color32> = [background, surface, surface_alt].into_iter().flatten().collect();
+    // Strong text is on hovered and pressed controls too.
+    let mut under_strong = panels.clone();
+    under_strong.extend(hover);
+    let text_strong = c.current.map(|fg| readable(fg, &under_strong, TEXT_CONTRAST));
+    let text_weak = text
+        .zip(surface)
+        .map(|(fg, bg)| readable(mix(fg, bg, 0.4), &panels, WEAK_CONTRAST));
+    let accent = c.selected_bg;
+    // The skin's own text on the selection if it reads there, else the
+    // current track's colour, else the text, changed until it reads.
+    let accent_text = accent.and_then(|bg| {
+        [text, text_strong]
+            .into_iter()
+            .flatten()
+            .find(|&fg| contrast(fg, bg) >= TEXT_CONTRAST)
+            .or_else(|| text.map(|fg| readable(fg, &[bg], TEXT_CONTRAST)))
+    });
+    let display = c.vis.as_deref().map(|v| v[0]);
+    let time = c.digits.map(|fg| match display.or(background) {
+        Some(bg) => readable(fg, &[bg], TEXT_CONTRAST),
+        None => fg,
+    });
 
     let mut out = String::new();
     out.push_str(&format!(
         "{HEADER} {source:?} by UnAmp.\n\
          # Only colours carry over; edit freely — this file isn't regenerated\n\
-         # while it exists. Delete it and use Skins → Reload to convert again.\n\n"
+         # while it exists. Delete it and use Skins → Reload to convert again.\n\
+         {CONTRAST_CHECKED} against what they're drawn on, and\n\
+         # moved toward black or white where the skin's own pairs don't read.\n\n"
     ));
     out.push_str(&format!("format = {}\n", crate::skin::FORMAT));
     out.push_str(&format!("name = {}\n", toml_string(name)));
@@ -181,15 +310,15 @@ pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
         }
     };
     line("background", background, "main.bmp average tone");
-    line("surface", c.normal_bg, "pledit NormalBG");
-    line("surface_alt", c.normal_bg.zip(c.normal).map(|(bg, fg)| mix(bg, fg, 0.06)), "NormalBG tinted with Normal");
+    line("surface", surface, "pledit NormalBG");
+    line("surface_alt", surface_alt, "NormalBG tinted with Normal");
     line("border", background.map(|bg| mix(bg, toward, 0.3)), "background, lifted");
-    line("text", c.normal, "pledit Normal");
-    line("text_strong", c.current, "pledit Current");
-    line("text_weak", c.normal.zip(c.normal_bg).map(|(fg, bg)| mix(fg, bg, 0.4)), "Normal faded toward NormalBG");
-    line("accent", c.selected_bg, "pledit SelectedBG");
-    line("accent_text", c.normal, "pledit Normal");
-    line("link", c.current, "pledit Current (now-playing track)");
+    line("text", text, "pledit Normal");
+    line("text_strong", text_strong, "pledit Current");
+    line("text_weak", text_weak, "Normal faded toward NormalBG");
+    line("accent", accent, "pledit SelectedBG");
+    line("accent_text", accent_text, "pledit Normal, or Current, on SelectedBG");
+    line("link", text_strong, "pledit Current (now-playing track)");
 
     out.push_str("\n[controls]\n");
     let mut line = |key: &str, value: Option<Color32>, note: &str| {
@@ -198,8 +327,8 @@ pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
         }
     };
     line("background", background, "same as the window background");
-    line("hover", background.map(|bg| mix(bg, toward, 0.12)), "background, lifted");
-    line("pressed", c.normal_bg, "pledit NormalBG");
+    line("hover", hover, "background, lifted");
+    line("pressed", surface, "pledit NormalBG");
 
     out.push_str(&format!(
         "\n[app.unamp]\n\
@@ -214,9 +343,9 @@ pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
             out.push_str(&format!("{key} = \"{}\"   # {note}\n", hex(v)));
         }
     };
-    line("display", vis.map(|v| v[0]), "viscolor 0, analyzer background");
-    line("time", c.digits, "numbers.bmp digit colour");
-    line("title", c.normal, "pledit Normal");
+    line("display", display, "viscolor 0, analyzer background");
+    line("time", time, "numbers.bmp digit colour");
+    line("title", text, "pledit Normal");
     line("spectrum_peak", vis.map(|v| v[23]), "viscolor 23, peak dots");
     if let Some(v) = vis {
         // Every analyzer colour, bottom (viscolor 17) to top (viscolor 2).
@@ -226,10 +355,21 @@ pub fn to_toml(name: &str, source: &str, c: &WszColors) -> String {
     out
 }
 
-/// A file this converter wrote before the theme format had a version.
-fn is_outdated_conversion(text: &str) -> bool {
-    text.starts_with(HEADER)
-        && toml::from_str::<toml::Table>(text).is_ok_and(|t| !t.contains_key("format"))
+/// Where to keep a conversion this converter wrote before, to redo it: one
+/// from before the theme format had a version goes to `.toml.v0`, and one
+/// from before contrast was checked to `.toml.v1`. `None` for anything
+/// else, a current conversion or a skin someone wrote.
+fn outdated_conversion(text: &str) -> Option<&'static str> {
+    if !text.starts_with(HEADER) {
+        return None;
+    }
+    if toml::from_str::<toml::Table>(text).is_ok_and(|t| !t.contains_key("format")) {
+        Some("toml.v0")
+    } else if !text.contains(CONTRAST_CHECKED) {
+        Some("toml.v1")
+    } else {
+        None
+    }
 }
 
 fn toml_string(s: &str) -> String {
@@ -237,9 +377,9 @@ fn toml_string(s: &str) -> String {
 }
 
 /// For each `.wsz` in `dir` without a same-named `.toml`, writes one.
-/// Existing TOML files are left alone so hand edits survive, except a
-/// conversion in the pre-suite skin format (no `format` key), which is
-/// redone with the old file kept beside it as `.toml.v0`.
+/// Existing TOML files are left alone so hand edits survive, except an
+/// outdated conversion (see `outdated_conversion`), which is redone with
+/// the old file kept beside it.
 pub fn convert_new_in(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -255,14 +395,13 @@ pub fn convert_new_in(dir: &Path) -> Vec<String> {
         }
         let target: PathBuf = path.with_extension("toml");
         if target.exists() {
-            match std::fs::read_to_string(&target) {
-                Ok(text) if is_outdated_conversion(&text) => {
-                    if let Err(e) = std::fs::rename(&target, target.with_extension("toml.v0")) {
-                        errors.push(format!("{}: {e}", target.display()));
-                        continue;
-                    }
-                }
-                _ => continue,
+            let text = std::fs::read_to_string(&target).unwrap_or_default();
+            let Some(backup) = outdated_conversion(&text) else {
+                continue;
+            };
+            if let Err(e) = std::fs::rename(&target, target.with_extension(backup)) {
+                errors.push(format!("{}: {e}", target.display()));
+                continue;
             }
         }
         let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -372,6 +511,87 @@ mod tests {
         assert_eq!(spectrum[15].0, Color32::from_rgb(239, 49, 16));
     }
 
+    /// The colours a converted skin's text is drawn on, and the text.
+    fn pairs(text: &str) -> Vec<(&'static str, Color32, Color32)> {
+        let t: toml::Table = toml::from_str(text).unwrap();
+        let get = |table: &str, key: &str| {
+            t[table].get(key).and_then(|v| parse_colour(v.as_str()?))
+        };
+        let colors = |key| get("colors", key);
+        let mut out = Vec::new();
+        for bg in ["background", "surface", "surface_alt"] {
+            for fg in ["text", "text_strong", "link"] {
+                out.push((fg, colors(fg).unwrap(), colors(bg).unwrap()));
+            }
+            out.push(("text_weak", colors("text_weak").unwrap(), colors(bg).unwrap()));
+        }
+        out.push(("text_strong", colors("text_strong").unwrap(), get("controls", "hover").unwrap()));
+        out.push(("accent_text", colors("accent_text").unwrap(), colors("accent").unwrap()));
+        let unamp = |key: &str| parse_colour(t["app"]["unamp"][key].as_str().unwrap()).unwrap();
+        out.push(("time", unamp("time"), unamp("display")));
+        out
+    }
+
+    fn assert_readable(text: &str) {
+        for (key, fg, bg) in pairs(text) {
+            let min = if key == "text_weak" { WEAK_CONTRAST } else { TEXT_CONTRAST };
+            assert!(contrast(fg, bg) >= min, "{key} {} on {}: {:.2}\n{text}", hex(fg), hex(bg), contrast(fg, bg));
+        }
+    }
+
+    #[test]
+    fn text_reads_on_a_mid_tone_window_and_a_bright_selection() {
+        // Shakira_04: orange on a brown window, and on a lighter orange selection.
+        let c = WszColors {
+            normal: Some(Color32::from_rgb(0xEB, 0x8B, 0x1C)),
+            current: Some(Color32::WHITE),
+            normal_bg: Some(Color32::BLACK),
+            selected_bg: Some(Color32::from_rgb(0xFB, 0xAD, 0x29)),
+            vis: parse_viscolor(VISCOLOR),
+            digits: Some(Color32::from_rgb(0xF8, 0xA4, 0x20)),
+            main_tone: Some(Color32::from_rgb(0x88, 0x5B, 0x45)),
+        };
+        let text = to_toml("Shakira", "Shakira.wsz", &c);
+        assert_readable(&text);
+        // The skin's orange is kept; the window darkens instead.
+        assert!(text.contains("text = \"#EB8B1C\""), "{text}");
+    }
+
+    #[test]
+    fn green_on_blue_keeps_its_green() {
+        // Windows_XP: green playlist text on a mid blue, on a lighter blue window.
+        let c = WszColors {
+            normal: Some(Color32::from_rgb(0, 255, 0)),
+            current: Some(Color32::WHITE),
+            normal_bg: Some(Color32::from_rgb(0x3F, 0x83, 0xE9)),
+            selected_bg: Some(Color32::from_rgb(0, 0, 0xC0)),
+            vis: parse_viscolor(VISCOLOR),
+            digits: Some(Color32::WHITE),
+            main_tone: Some(Color32::from_rgb(0x6D, 0x8E, 0xDD)),
+        };
+        let text = to_toml("XP", "XP.wsz", &c);
+        assert_readable(&text);
+        assert!(text.contains("text = \"#00FF00\""), "{text}");
+    }
+
+    #[test]
+    fn readable_pairs_are_left_alone() {
+        let c = WszColors {
+            normal: Some(Color32::from_rgb(0, 255, 0)),
+            current: Some(Color32::WHITE),
+            normal_bg: Some(Color32::BLACK),
+            selected_bg: Some(Color32::from_rgb(0, 0, 0xC6)),
+            vis: parse_viscolor(VISCOLOR),
+            digits: Some(Color32::from_rgb(0, 248, 0)),
+            main_tone: Some(Color32::from_rgb(0x28, 0x28, 0x3C)),
+        };
+        let text = to_toml("Classic", "Classic.wsz", &c);
+        assert_readable(&text);
+        for line in ["background = \"#28283C\"", "surface = \"#000000\"", "text = \"#00FF00\"", "accent_text = \"#00FF00\""] {
+            assert!(text.contains(line), "{line}\n{text}");
+        }
+    }
+
     #[test]
     fn empty_skin_still_converts() {
         let text = to_toml("Bare", "Bare.wsz", &WszColors::default());
@@ -411,6 +631,26 @@ mod tests {
         let redone = std::fs::read_to_string(dir.join("Squall.toml")).unwrap();
         assert!(redone.contains("format = 1"), "{redone}");
         assert_eq!(std::fs::read_to_string(dir.join("Squall.toml.v0")).unwrap(), old);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conversions_from_before_the_contrast_check_are_redone_with_a_backup() {
+        let dir = std::env::temp_dir().join(format!("unamp-wsz-contrast-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let archive = wsz(&[("pledit.txt", b"Normal=#00FF00".to_vec())]).into_inner();
+        std::fs::write(dir.join("Squall.wsz"), archive).unwrap();
+        let old = format!("{HEADER} \"Squall.wsz\" by UnAmp.\nformat = 1\nname = \"Squall\"\n");
+        std::fs::write(dir.join("Squall.toml"), &old).unwrap();
+
+        assert!(convert_new_in(&dir).is_empty());
+        let redone = std::fs::read_to_string(dir.join("Squall.toml")).unwrap();
+        assert!(redone.contains(CONTRAST_CHECKED), "{redone}");
+        assert_eq!(std::fs::read_to_string(dir.join("Squall.toml.v1")).unwrap(), old);
+        // Redone once: the new conversion stays.
+        assert!(convert_new_in(&dir).is_empty());
+        assert_eq!(std::fs::read_to_string(dir.join("Squall.toml")).unwrap(), redone);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

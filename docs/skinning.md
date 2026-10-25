@@ -182,7 +182,9 @@ rather than another `.wsz`.
    the `.wsz` (before converting) for something tidier.
 
 The TOML is generated **once**. UnAmp never overwrites it, so tune it freely. To convert again
-(say, after a newer UnAmp improves conversion), delete the `.toml` and reload.
+(say, after a newer UnAmp improves conversion), delete the `.toml` and reload. The exception is a
+conversion made before UnAmp checked contrast: it's redone once, with the old file kept beside it
+as `.toml.v1`, so copy any tuning you want back from there.
 
 ### What the generated TOML contains
 
@@ -191,10 +193,23 @@ Colours are pulled from the skin so the Media Library and menus match it
 
 | From the skin | Becomes |
 |---|---|
-| `pledit.txt` Normal, Current, NormalBG, SelectedBG | `text`, `text_strong`/`link`/`title`, `surface`/`controls.pressed`, `accent` |
+| `pledit.txt` Normal, Current, NormalBG, SelectedBG | `text`/`title`, `text_strong`/`link`, `surface`/`controls.pressed`, `accent` (with `accent_text`, Normal or Current) |
 | `viscolor.txt` (24 colours) | `display`, the full `spectrum`, `spectrum_peak` |
 | `numbers.bmp` / `nums_ex.bmp` (brightest pixel) | `time` |
 | `main.bmp` (average colour) | `background`, and whether `base` is dark or light |
+
+A skin's colours were chosen for Winamp's bitmaps, so they don't always read in UnAmp's windows:
+orange text on a brown window, green on a mid blue. Every text colour is checked against what it's
+drawn on and must reach WCAG's 4.5:1 (3:1 for `text_weak`)
+([ADR-0033](adr/0033-converted-skins-are-checked-for-contrast.md)). Where it doesn't:
+
+- the playlist's background moves toward black or white first, up to halfway, and only then does
+  the text, so the skin keeps the text colour it's recognised by;
+- the window background, made from `main.bmp`'s average, moves as far as the text needs;
+- the other text colours (`text_strong`, `text_weak`, `accent_text`, `time`) move toward black or
+  white by the smallest step that reads.
+
+Colours that already read are written as the skin has them.
 
 Plus the line, under `[app.unamp]`, that turns on the bitmap windows:
 
