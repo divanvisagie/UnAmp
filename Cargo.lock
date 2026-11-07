@@ -2813,16 +2813,20 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "patina-ui"
-version = "0.1.12"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b92783ecf47b0ddd466e5c677fc0a7febdaa28056659f778709600ae651d8190"
+checksum = "b69807f529374bcc49f79d32d3d25d4d22e9f0f89910d94d56f8a89b9de96338"
 dependencies = [
  "dirs",
  "egui",
  "libc",
+ "raw-window-handle",
  "serde",
  "serde_ignored",
  "toml",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols-plasma",
  "zbus",
 ]
 

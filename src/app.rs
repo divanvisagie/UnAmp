@@ -1942,7 +1942,7 @@ impl eframe::App for UnAmpApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, eframe_frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
 
@@ -1973,6 +1973,11 @@ impl eframe::App for UnAmpApp {
         } else {
             0
         };
+        if custom_frame {
+            // The skin draws the window's frame, so ask the compositor for
+            // its drop shadow (a no-op after the first time, and off KDE/Patina).
+            frame::shadow::request(eframe_frame);
+        }
         let title = self.window_title.clone();
         let frame_style = self.palette.frame;
         egui::Panel::top("menu")
